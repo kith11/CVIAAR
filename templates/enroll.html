@@ -1,0 +1,84 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="text-center">
+    <h2>Enrolling: {{ user.name }}</h2>
+    <p class="text-muted">Please look at the camera. We need to capture 10 face images.</p>
+    
+    <div class="position-relative d-inline-block">
+        <img src="{{ url_for('video_feed') }}" class="img-fluid border rounded" style="max-width: 640px; width: 100%;">
+        <div id="status-overlay" class="position-absolute top-0 start-0 w-100 h-100 d-flex justify-content-center align-items-center" style="background: rgba(0,0,0,0.5); display: none !important;">
+            <div class="text-white h3">Done! Retraining...</div>
+        </div>
+    </div>
+
+    <div class="mt-4" style="max-width: 640px; margin: 20px auto;">
+        <h5>Progress: <span id="count">0</span>/10</h5>
+        <div class="progress">
+            <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+        </div>
+        <div id="message" class="mt-2 text-info">Initializing...</div>
+    </div>
+</div>
+
+<script>
+    const userId = "{{ user.id }}";
+    const progressBar = document.getElementById('progress-bar');
+    const countSpan = document.getElementById('count');
+    const messageDiv = document.getElementById('message');
+    const statusOverlay = document.getElementById('status-overlay');
+    let captured = 0;
+    let isTraining = false;
+
+    function captureFace() {
+        if (captured >= 10 || isTraining) return;
+
+        fetch(`/api/capture/${userId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success' || data.status === 'complete') {
+                    captured = data.count;
+                    updateProgress();
+                    
+                    if (captured >= 10) {
+                        startTraining();
+                    } else {
+                        messageDiv.textContent = "Face captured! stay still...";
+                        setTimeout(captureFace, 500); // Wait a bit before next capture
+                    }
+                } else if (data.status === 'no_face') {
+                    messageDiv.textContent = "No face detected. Please look at the camera.";
+                    setTimeout(captureFace, 1000);
+                } else {
+                    messageDiv.textContent = "Error: " + data.message;
+                    setTimeout(captureFace, 1000);
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                setTimeout(captureFace, 1000);
+            });
+    }
+
+    function updateProgress() {
+        const percent = (captured / 10) * 100;
+        progressBar.style.width = percent + '%';
+        countSpan.textContent = captured;
+    }
+
+    function startTraining() {
+        if (isTraining) return;
+        isTraining = true;
+        messageDiv.textContent = "Images collected. Retraining model... (this may take a few seconds)";
+        statusOverlay.style.display = 'flex';
+        
+        fetch('/api/train')
+            .then(response => response.json())
+            .then(data => {
+                window.location.href = '/admin';
+            });
+    }
+
+    // Start capturing after 1 second
+    setTimeout(captureFace, 1000);
+</script>
+{% endblock %}

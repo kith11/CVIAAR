@@ -1,0 +1,11 @@
+flask
+flask-sqlalchemy
+opencv-contrib-python<4.9
+mediapipe==0.10.9
+protobuf==3.20.3
+pillow
+imutils
+numpy<2
+python-dotenv
+openai
+pandas
