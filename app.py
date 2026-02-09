@@ -1,14 +1,15 @@
 import os
+import sys
 import cv2
 import time
 import threading
 from datetime import datetime, timedelta
 from flask import Flask, render_template, Response, request, redirect, url_for, jsonify, flash, session
 from functools import wraps
-from models import db, User, Attendance
-from camera import Camera
-from face_engine import FaceEngine
-from analytics_engine import AnalyticsEngine
+from modules.models import db, User, Attendance
+from modules.camera import Camera
+from modules.face_engine import FaceEngine
+from modules.analytics_engine import AnalyticsEngine
 import numpy as np
 from dotenv import load_dotenv
 from openai import OpenAI, AuthenticationError
@@ -16,11 +17,16 @@ from openai import OpenAI, AuthenticationError
 load_dotenv()
 
 app = Flask(__name__)
-basedir = os.path.abspath(os.path.dirname(__file__))
+
+if getattr(sys, 'frozen', False):
+    basedir = os.path.dirname(sys.executable)
+else:
+    basedir = os.path.abspath(os.path.dirname(__file__))
+
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'data', 'attendance.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.secret_key = 'supersecretkey'
-app.config['ADMIN_PASSWORD'] = 'admin123'  # Simple password
+app.secret_key = os.getenv('SECRET_KEY', 'default_dev_key')
+app.config['ADMIN_PASSWORD'] = os.getenv('ADMIN_PASSWORD', 'admin123')
 
 # Ensure data directories exist
 os.makedirs('data/faces', exist_ok=True)
@@ -39,7 +45,10 @@ def login_required(f):
 # Initialize Camera and Face Engine
 # We will initialize camera globally but it's better to instantiate on demand or keep a singleton
 camera = Camera()
-face_engine = FaceEngine()
+face_engine = FaceEngine(
+    model_path=os.path.join(basedir, 'data', 'lbph_model.yml'),
+    faces_dir=os.path.join(basedir, 'data', 'faces')
+)
 
 # Global variables
 attendance_cache = {}
@@ -162,7 +171,16 @@ def generate_frames():
             
             # Consistency Logic
             is_consistent = False
-            if label != -1 and confidence < 60: # Stricter Threshold (was 80)
+            
+            # DEBUG: Print confidence to console
+            if label != -1:
+                print(f"DEBUG: Face {label} Confidence: {confidence:.2f}")
+
+            # LBPH Confidence: Lower is better. 
+            # 0 = Perfect match. 
+            # < 50 is very strict. < 80 is loose.
+            # Adjusted to 65 based on feedback (too strict at 50).
+            if label != -1 and confidence < 65: 
                 if label == current_face_id:
                     consecutive_face_count += 1
                 else:
@@ -320,6 +338,7 @@ def admin():
 def add_user():
     name = request.form.get('name')
     user_id = request.form.get('user_id')
+    employment_type = request.form.get('employment_type', 'Full-time')
     
     if not name:
         flash('Name is required.', 'danger')
@@ -333,13 +352,13 @@ def add_user():
             if existing:
                 flash(f'User ID {uid} already exists.', 'danger')
                 return redirect(url_for('admin'))
-            new_user = User(id=uid, name=name)
+            new_user = User(id=uid, name=name, employment_type=employment_type)
         except ValueError:
             flash('Invalid User ID.', 'danger')
             return redirect(url_for('admin'))
     else:
         # Auto-increment
-        new_user = User(name=name)
+        new_user = User(name=name, employment_type=employment_type)
 
     db.session.add(new_user)
     db.session.commit()
@@ -671,6 +690,17 @@ def get_user_logs(user_id):
 # Helper to init DB
 with app.app_context():
     db.create_all()
+    
+    # Simple migration: Check if employment_type exists in User table
+    from sqlalchemy import inspect
+    inspector = inspect(db.engine)
+    columns = [col['name'] for col in inspector.get_columns('user')]
+    if 'employment_type' not in columns:
+        print("Migrating DB: Adding employment_type to User table...")
+        with db.engine.connect() as conn:
+            conn.execute(db.text('ALTER TABLE user ADD COLUMN employment_type VARCHAR(20) DEFAULT "Full-time"'))
+            conn.commit()
+
 
 last_auto_logout_date = None
 
@@ -797,7 +827,8 @@ def advanced_analytics_data():
     engine = AnalyticsEngine(db.session)
     return jsonify({
         'weekly_trends': engine.get_weekly_trends(),
-        'peak_arrival': engine.get_peak_arrival_times(),
+        'monthly_trends': engine.get_monthly_trends(),
+        'peak_arrival': engine.get_peak_arrival_times() if hasattr(engine, 'get_peak_arrival_times') else {},
         'risk_users': engine.predict_risk_users()
     })
 

@@ -9,3 +9,5 @@ numpy<2
 python-dotenv
 openai
 pandas
+waitress
+pywebview

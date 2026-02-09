@@ -1,0 +1,371 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="fw-bold text-dark mb-0">Admin Dashboard</h2>
+        <p class="text-muted mb-0">Overview and Management</p>
+    </div>
+    <div>
+        <span class="badge bg-light text-dark border px-3 py-2 fs-6 shadow-sm">
+            <script>document.write(new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }));</script>
+        </span>
+    </div>
+</div>
+
+<div class="row g-4">
+    <!-- LEFT COLUMN: Actions & Registration -->
+    <div class="col-lg-4">
+        
+        <!-- Registration Card -->
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header bg-white py-3 border-bottom">
+                <h5 class="mb-0 fw-bold text-primary">👤 New User Registration</h5>
+            </div>
+            <div class="card-body">
+                <form action="/add_user" method="POST">
+                    <div class="form-floating mb-3">
+                        <input type="number" name="user_id" class="form-control" id="userId" placeholder="Auto">
+                        <label for="userId">User ID (Optional)</label>
+                    </div>
+                    <div class="form-floating mb-3">
+                        <input type="text" name="name" class="form-control" id="userName" required placeholder="Name">
+                        <label for="userName">Full Name</label>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100 fw-bold py-2">Register & Capture</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- System Controls Card -->
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header bg-white py-3 border-bottom">
+                <h5 class="mb-0 fw-bold text-secondary">⚙️ System Controls</h5>
+            </div>
+            <div class="card-body d-flex flex-column gap-2">
+                <a href="/train" class="btn btn-outline-warning w-100 text-start fw-semibold">
+                    🔄 Retrain Face Model
+                </a>
+                <hr class="my-2">
+                <a href="/logout" class="btn btn-outline-danger w-100 text-start fw-semibold">
+                    🚪 Logout System
+                </a>
+            </div>
+        </div>
+
+        <!-- Alerts Section -->
+        <div id="alerts-section" class="card border-0 shadow-sm border-start border-danger border-5 d-none">
+            <div class="card-body">
+                <h5 class="text-danger fw-bold mb-3">⚠️ Attention Required</h5>
+                <ul id="alerts-list" class="mb-0 ps-3 text-muted small"></ul>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- RIGHT COLUMN: Data Tables -->
+    <div class="col-lg-8">
+        
+        <!-- Analytics Chart -->
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header bg-white py-3 border-bottom">
+                <h5 class="mb-0 fw-bold">📈 Weekly Attendance Trends</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="attendanceChart" height="100"></canvas>
+            </div>
+        </div>
+
+        <!-- User Analytics Table -->
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center border-bottom">
+                <h5 class="mb-0 fw-bold">👥 User Status</h5>
+                <button class="btn btn-sm btn-light border" onclick="location.reload()">🔄 Refresh</button>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0" id="analytics-table">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-3">ID</th>
+                            <th>Name</th>
+                            <th class="text-center">Present</th>
+                            <th class="text-center">Tardy</th>
+                            <th class="text-center">Absent</th>
+                            <th class="text-center">Excused</th>
+                            <th class="text-end pe-3">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="border-top-0">
+                        <!-- Content populated by JS -->
+                        <tr><td colspan="7" class="text-center py-4 text-muted">Loading data...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Recent Logs Table -->
+        <div class="card shadow-sm border-0">
+            <div class="card-header bg-white py-3 border-bottom">
+                <h5 class="mb-0 fw-bold">🕒 Recent Activity Logs</h5>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover table-sm align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-3">Time</th>
+                            <th>User</th>
+                            <th>Status</th>
+                            <th>Notes</th>
+                            <th class="text-end pe-3">Edit</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for log in logs %}
+                        <tr>
+                            <td class="ps-3 text-muted small">{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                            <td class="fw-semibold">{{ log.user.name }}</td>
+                            <td>
+                                <span class="badge rounded-pill bg-{{ 'success' if log.status in ['Present', 'On Time'] else 'warning' if log.status in ['Tardy', 'Late'] else 'danger' if log.status == 'Absent' else 'info' if log.status == 'Excused' else 'secondary' }} px-3">
+                                    {{ log.status }}
+                                </span>
+                            </td>
+                            <td class="small text-truncate" style="max-width: 150px;">{{ log.notes if log.notes else '' }}</td>
+                            <td class="text-end pe-3">
+                                <button class="btn btn-sm btn-light border" data-bs-toggle="modal" data-bs-target="#editLogModal{{ log.id }}">✏️</button>
+                                
+                                <!-- Edit Log Modal (Inline) -->
+                                <div class="modal fade text-start" id="editLogModal{{ log.id }}" tabindex="-1">
+                                    <div class="modal-dialog">
+                                        <form action="/edit_attendance_log" method="POST">
+                                            <input type="hidden" name="log_id" value="{{ log.id }}">
+                                            <div class="modal-content">
+                                                <div class="modal-header">
+                                                    <h5 class="modal-title">Edit Log #{{ log.id }}</h5>
+                                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                                </div>
+                                                <div class="modal-body">
+                                                    <div class="mb-3">
+                                                        <label class="form-label">Status</label>
+                                                        <select name="status" class="form-select">
+                                                            <option value="On Time" {{ 'selected' if log.status in ['On Time', 'Present'] }}>On Time</option>
+                                                            <option value="Late" {{ 'selected' if log.status in ['Late', 'Tardy'] }}>Late</option>
+                                                            <option value="Absent" {{ 'selected' if log.status == 'Absent' }}>Absent</option>
+                                                            <option value="Excused" {{ 'selected' if log.status == 'Excused' }}>Excused</option>
+                                                            <option value="Logout" {{ 'selected' if log.status == 'Logout' }}>Logout</option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="mb-3">
+                                                        <label class="form-label">Notes</label>
+                                                        <textarea name="notes" class="form-control" rows="2">{{ log.notes if log.notes else '' }}</textarea>
+                                                    </div>
+                                                </div>
+                                                <div class="modal-footer">
+                                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                    <button type="submit" class="btn btn-primary">Save Changes</button>
+                                                </div>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<!-- User Details Modal -->
+<div class="modal fade" id="userDetailsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title" id="detailsUserTitle">User Details</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <h6 class="fw-bold mb-3">Recent Activity (Last 50 Logs)</h6>
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Status</th>
+                                <th>Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody id="detailsUserLogs">
+                            <!-- Populated via JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    fetch('/analytics')
+        .then(response => response.json())
+        .then(data => {
+            const tbody = document.querySelector('#analytics-table tbody');
+            tbody.innerHTML = ''; // Clear loading message
+            
+            data.stats.forEach(user => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="ps-3 fw-bold text-muted">${user.id}</td>
+                    <td class="fw-semibold">${user.name}</td>
+                    <td class="text-center"><span class="badge bg-success bg-opacity-10 text-success border border-success px-2">${user.present}</span></td>
+                    <td class="text-center"><span class="badge bg-warning bg-opacity-10 text-warning border border-warning px-2">${user.tardy}</span></td>
+                    <td class="text-center"><span class="badge bg-danger bg-opacity-10 text-danger border border-danger px-2">${user.absent}</span></td>
+                    <td class="text-center"><span class="badge bg-info bg-opacity-10 text-info border border-info px-2">${user.excused}</span></td>
+                    <td class="text-end pe-3">
+                        <div class="btn-group">
+                            <button class="btn btn-sm btn-outline-primary" onclick="viewUser(${user.id})" title="View Details">👁️</button>
+                            <a href="/generate_report_form/${user.id}" class="btn btn-sm btn-outline-info" title="Report">📄</a>
+                            <button type="button" class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#editModal${user.id}" title="Edit">✏️</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" onclick="confirmDelete(${user.id}, '${user.name}')" title="Delete">🗑️</button>
+                        </div>
+
+                        <!-- Edit User Modal -->
+                        <div class="modal fade text-start" id="editModal${user.id}" tabindex="-1" aria-hidden="true">
+                            <div class="modal-dialog">
+                                <div class="modal-content">
+                                    <div class="modal-header">
+                                        <h5 class="modal-title">Edit User</h5>
+                                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                    </div>
+                                    <form action="/edit_user/${user.id}" method="POST">
+                                        <div class="modal-body">
+                                            <div class="mb-3">
+                                                <label class="form-label">Name</label>
+                                                <input type="text" name="name" class="form-control" value="${user.name}" required>
+                                            </div>
+                                            <div class="row">
+                                                <div class="col-6 mb-3">
+                                                    <label class="form-label">Schedule Start</label>
+                                                    <input type="time" name="schedule_start" class="form-control" value="${user.schedule_start}">
+                                                </div>
+                                                <div class="col-6 mb-3">
+                                                    <label class="form-label">Schedule End</label>
+                                                    <input type="time" name="schedule_end" class="form-control" value="${user.schedule_end}">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="modal-footer">
+                                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                                            <button type="submit" class="btn btn-primary">Save Changes</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Hidden Delete Form -->
+                        <form id="deleteForm${user.id}" action="/delete_user/${user.id}" method="POST" style="display:none;"></form>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            if (data.alerts.length > 0) {
+                const alertSection = document.getElementById('alerts-section');
+                const alertList = document.getElementById('alerts-list');
+                alertSection.classList.remove('d-none');
+                data.alerts.forEach(alert => {
+                    const li = document.createElement('li');
+                    li.textContent = alert;
+                    alertList.appendChild(li);
+                });
+            }
+        });
+
+    function viewUser(userId) {
+        fetch(`/api/user_logs/${userId}`)
+            .then(r => r.json())
+            .then(data => {
+                if(data.error) {
+                    alert(data.error);
+                    return;
+                }
+                document.getElementById('detailsUserTitle').innerText = `${data.user.name} (ID: ${data.user.id})`;
+                const tbody = document.getElementById('detailsUserLogs');
+                tbody.innerHTML = '';
+                if(data.logs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No recent activity found.</td></tr>';
+                } else {
+                    data.logs.forEach(log => {
+                        let badgeClass = 'secondary';
+                        if (['On Time', 'Present'].includes(log.status)) badgeClass = 'success';
+                        else if (['Late', 'Tardy'].includes(log.status)) badgeClass = 'warning';
+                        else if (log.status === 'Absent') badgeClass = 'danger';
+                        else if (log.status === 'Excused') badgeClass = 'info';
+                        
+                        tbody.innerHTML += `
+                            <tr>
+                                <td>${log.timestamp}</td>
+                                <td><span class="badge bg-${badgeClass}">${log.status}</span></td>
+                                <td>${log.notes}</td>
+                            </tr>
+                        `;
+                    });
+                }
+                new bootstrap.Modal(document.getElementById('userDetailsModal')).show();
+            })
+            .catch(err => console.error('Error fetching logs:', err));
+    }
+
+    function confirmDelete(id, name) {
+        if (confirm(`Are you sure you want to delete ${name}?`)) {
+            document.getElementById(`deleteForm${id}`).submit();
+        }
+    }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        // Render Chart
+        const trends = {{ trends | tojson }};
+        const ctx = document.getElementById('attendanceChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: trends.labels,
+                datasets: [
+                    { label: 'Present', data: trends.present, backgroundColor: '#198754' },
+                    { label: 'Late', data: trends.late, backgroundColor: '#ffc107' },
+                    { label: 'Absent', data: trends.absent, backgroundColor: '#dc3545' }
+                ]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: { stacked: true },
+                    y: { stacked: true, beginAtZero: true }
+                }
+            }
+        });
+
+        // Add Risk Alerts
+        const risks = {{ risks | tojson }};
+        if (risks.length > 0) {
+            const alertSection = document.getElementById('alerts-section');
+            const alertList = document.getElementById('alerts-list');
+            alertSection.classList.remove('d-none');
+            
+            risks.forEach(risk => {
+                const li = document.createElement('li');
+                li.innerHTML = `<strong>${risk.name}:</strong> ${risk.prediction} (Late: ${risk.late_rate.toFixed(1)}%, Absent: ${risk.absent_rate.toFixed(1)}%)`;
+                alertList.appendChild(li);
+            });
+        }
+    });
+</script>
+{% endblock %}

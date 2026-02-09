@@ -21,8 +21,20 @@
         </div>
     </div>
 
-    <!-- Peak Arrival Times -->
+    <!-- Monthly Trends -->
     <div class="col-md-6 mb-4">
+        <div class="card shadow-sm">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0">Monthly Attendance Trends</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="monthlyTrendsChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Peak Arrival Times -->
+    <div class="col-md-12 mb-4">
         <div class="card shadow-sm">
             <div class="card-header bg-secondary">
                 <h5 class="mb-0">Peak Arrival Times (Morning)</h5>
@@ -71,11 +83,49 @@
             .then(response => response.json())
             .then(data => {
                 renderWeeklyChart(data.weekly_trends);
-                renderPeakChart(data.peak_arrival);
+                renderMonthlyChart(data.monthly_trends);
+                if (data.peak_arrival && Object.keys(data.peak_arrival).length > 0) {
+                     renderPeakChart(data.peak_arrival);
+                }
                 renderRiskTable(data.risk_users);
             })
             .catch(error => console.error('Error loading analytics:', error));
     });
+
+    function renderMonthlyChart(data) {
+        if (!data || data.labels.length === 0) return;
+        const ctx = document.getElementById('monthlyTrendsChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: data.labels,
+                datasets: [
+                    {
+                        label: 'Present',
+                        data: data.present,
+                        backgroundColor: '#198754'
+                    },
+                    {
+                        label: 'Late',
+                        data: data.late,
+                        backgroundColor: '#ffc107'
+                    },
+                    {
+                        label: 'Absent',
+                        data: data.absent,
+                        backgroundColor: '#dc3545'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: { stacked: true, title: { display: true, text: 'Day of Month' } },
+                    y: { stacked: true, beginAtZero: true }
+                }
+            }
+        });
+    }
 
     function renderWeeklyChart(data) {
         const ctx = document.getElementById('weeklyTrendsChart').getContext('2d');
