@@ -52,7 +52,7 @@
             </div>
             <div class="card-footer bg-light text-center border-top-0 p-3" id="manual-entry-container">
                 <button class="btn btn-outline-primary w-100 py-2 fw-bold" data-bs-toggle="modal" data-bs-target="#manualEntryModal">
-                    ⌨️ Manual ID Entry
+                    ⌨️ Enter & Verify ID
                 </button>
             </div>
         </div>
@@ -64,7 +64,7 @@
     <div class="modal-dialog modal-sm modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg">
             <div class="modal-header bg-primary text-white border-0">
-                <h5 class="modal-title">Manual Entry</h5>
+                <h5 class="modal-title">Enter ID</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body p-4">
@@ -93,7 +93,7 @@
                 </form>
 
                 <div class="d-grid gap-2">
-                    <button class="btn btn-success py-2" onclick="loginSubmit()">Verify & Mark Attendance</button>
+                    <button class="btn btn-success py-2" onclick="loginSubmit()">Log-in</button>
                     <button class="btn btn-warning py-2 text-dark" onclick="logoutSubmit()">Logout (End Shift)</button>
                 </div>
             </div>
@@ -198,12 +198,10 @@
     const statusOverlay = document.getElementById('status-overlay');
 
     // Start Camera
-    // Only start camera if on localhost or explicitly requested
+    // Only start camera if on localhost
     const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(window.location.hostname);
-    const urlParams = new URLSearchParams(window.location.search);
-    const forceCam = urlParams.get('cam') === '1';
 
-    if ((isLocal || forceCam) && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    if (isLocal && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } })
             .then(stream => {
                 video.srcObject = stream;
@@ -216,7 +214,7 @@
                 statusMsg.textContent = "Error: Camera access denied. Check permissions.";
                 statusOverlay.className = 'position-absolute bottom-0 start-0 w-100 p-3 bg-danger text-white';
             });
-    } else if (!isLocal && !forceCam) {
+    } else if (!isLocal) {
         // Remote Mode
         statusMsg.textContent = "Remote Monitoring Mode. Camera Disabled.";
         statusOverlay.className = 'position-absolute bottom-0 start-0 w-100 p-3 bg-secondary text-white';
