@@ -1,8 +1,12 @@
-from app import app
+import sys
+import os
 
-if __name__ == "__main__":
-    from waitress import serve
-    print("Starting Waitress WSGI server...")
-    print("Local access:   http://localhost:5000")
-    print("Network access: http://192.168.1.36:5000")
-    serve(app, host="0.0.0.0", port=5000, threads=6)
+# Add your project directory to the sys.path
+project_home = os.path.expanduser('~/mysite')
+if project_home not in sys.path:
+    sys.path = [project_home] + sys.path
+
+# Set the environment variable for the database if needed, though app.py handles basedir
+# os.environ['DATABASE_URL'] = 'sqlite:////home/yourusername/mysite/data/attendance.db'
+
+from app import app as application

@@ -50,6 +50,9 @@
                 <h5 class="mb-0 fw-bold text-secondary">⚙️ System Controls</h5>
             </div>
             <div class="card-body d-flex flex-column gap-2">
+                <a href="{{ url_for('advanced_analytics') }}" class="btn btn-outline-primary w-100 text-start fw-semibold">
+                    📊 Advanced Analytics
+                </a>
                 <a href="/train" class="btn btn-outline-warning w-100 text-start fw-semibold">
                     🔄 Retrain Face Model
                 </a>
@@ -95,6 +98,7 @@
                         <tr>
                             <th class="ps-3">ID</th>
                             <th>Name</th>
+                            <th>Type</th>
                             <th class="text-center">Present</th>
                             <th class="text-center">Tardy</th>
                             <th class="text-center">Absent</th>
@@ -222,27 +226,27 @@
         .then(response => response.json())
         .then(data => {
             const tbody = document.querySelector('#analytics-table tbody');
-            tbody.innerHTML = ''; // Clear loading message
-            
+            tbody.innerHTML = '';
             data.stats.forEach(user => {
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td class="ps-3 fw-bold text-muted">${user.id}</td>
-                    <td class="fw-semibold">${user.name}</td>
-                    <td class="text-center"><span class="badge bg-success bg-opacity-10 text-success border border-success px-2">${user.present}</span></td>
-                    <td class="text-center"><span class="badge bg-warning bg-opacity-10 text-warning border border-warning px-2">${user.tardy}</span></td>
-                    <td class="text-center"><span class="badge bg-danger bg-opacity-10 text-danger border border-danger px-2">${user.absent}</span></td>
-                    <td class="text-center"><span class="badge bg-info bg-opacity-10 text-info border border-info px-2">${user.excused}</span></td>
+                    <td class="ps-3 fw-bold text-secondary">${user.id}</td>
+                    <td class="fw-bold text-dark">${user.name}</td>
+                    <td><span class="badge bg-info text-dark">${user.employment_type || 'Full-time'}</span></td>
+                    <td class="text-center"><span class="badge bg-success rounded-pill px-3">${user.present}</span></td>
+                    <td class="text-center"><span class="badge bg-warning text-dark rounded-pill px-3">${user.tardy}</span></td>
+                    <td class="text-center"><span class="badge bg-danger rounded-pill px-3">${user.absent}</span></td>
+                    <td class="text-center"><span class="badge bg-secondary rounded-pill px-3">${user.excused}</span></td>
                     <td class="text-end pe-3">
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" onclick="viewUser(${user.id})" title="View Details">👁️</button>
-                            <a href="/generate_report_form/${user.id}" class="btn btn-sm btn-outline-info" title="Report">📄</a>
-                            <button type="button" class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#editModal${user.id}" title="Edit">✏️</button>
-                            <button type="button" class="btn btn-sm btn-outline-danger" onclick="confirmDelete(${user.id}, '${user.name}')" title="Delete">🗑️</button>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-primary" onclick="viewUser(${user.id})" title="View Logs">👁️</button>
+                            <a href="/generate_report_form/${user.id}" class="btn btn-outline-info" title="Report">📄</a>
+                            <button class="btn btn-outline-warning" data-bs-toggle="modal" data-bs-target="#editUserModal${user.id}" title="Edit">✏️</button>
+                            <button class="btn btn-outline-danger" onclick="confirmDelete(${user.id}, '${user.name}')" title="Delete">🗑️</button>
                         </div>
 
-                        <!-- Edit User Modal -->
-                        <div class="modal fade text-start" id="editModal${user.id}" tabindex="-1" aria-hidden="true">
+                        <!-- Edit Modal -->
+                        <div class="modal fade" id="editUserModal${user.id}" tabindex="-1">
                             <div class="modal-dialog">
                                 <div class="modal-content">
                                     <div class="modal-header">
@@ -250,10 +254,17 @@
                                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                                     </div>
                                     <form action="/edit_user/${user.id}" method="POST">
-                                        <div class="modal-body">
+                                        <div class="modal-body text-start">
                                             <div class="mb-3">
                                                 <label class="form-label">Name</label>
                                                 <input type="text" name="name" class="form-control" value="${user.name}" required>
+                                            </div>
+                                            <div class="mb-3">
+                                                <label class="form-label">Employment Type</label>
+                                                <select name="employment_type" class="form-select">
+                                                    <option value="Full-time" ${user.employment_type === 'Full-time' ? 'selected' : ''}>Full-time</option>
+                                                    <option value="Part-time" ${user.employment_type === 'Part-time' ? 'selected' : ''}>Part-time</option>
+                                                </select>
                                             </div>
                                             <div class="row">
                                                 <div class="col-6 mb-3">

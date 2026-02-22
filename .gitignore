@@ -1,6 +1,13 @@
-.venv/
 __pycache__/
-instance/
-*.pyc
-app.db
+*.py[cod]
+*$py.class
 .env
+venv/
+.venv/
+data/attendance.db
+data/faces/
+*.db
+.DS_Store
+dist/
+build/
+*.spec

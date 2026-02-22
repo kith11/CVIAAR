@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+venv/
+.venv/
+data/attendance.db
+data/faces/
+*.db
+.DS_Store
+.git/
+.gitignore
+Dockerfile
+docker-compose.yml
+dist/
+build/
+*.spec

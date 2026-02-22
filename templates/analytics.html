@@ -2,18 +2,72 @@
 
 {% block content %}
 <div class="row mb-4">
-    <div class="col-md-12">
+    <div class="col-md-8">
         <h2>Advanced Analytics & Predictions</h2>
         <p class="text-muted">Data-driven insights into attendance patterns.</p>
+    </div>
+    <div class="col-md-4 text-end">
+        <a href="{{ url_for('admin') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left"></i> Back to Dashboard
+        </a>
+    </div>
+</div>
+
+<!-- Filter Controls -->
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light">
+        <div class="d-flex justify-content-between align-items-center">
+            <h6 class="mb-0">Filter Data</h6>
+            <div class="btn-group btn-group-sm">
+                <button type="button" class="btn btn-outline-primary" onclick="setDateRange('today')">Today</button>
+                <button type="button" class="btn btn-outline-primary" onclick="setDateRange('week')">This Week</button>
+                <button type="button" class="btn btn-outline-primary" onclick="setDateRange('month')">This Month</button>
+            </div>
+        </div>
+    </div>
+    <div class="card-body">
+        <form id="filterForm" class="row g-3 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label">Start Date</label>
+                <input type="date" id="startDate" class="form-control">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">End Date</label>
+                <input type="date" id="endDate" class="form-control">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Type</label>
+                <select id="empType" class="form-select">
+                    <option value="All">All Types</option>
+                    <option value="Full-time">Full-time</option>
+                    <option value="Part-time">Part-time</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">User</label>
+                <select id="userFilter" class="form-select">
+                    <option value="All">All Users</option>
+                    {% for u in users %}
+                    <option value="{{ u.id }}">{{ u.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary w-100">Apply</button>
+            </div>
+        </form>
     </div>
 </div>
 
 <div class="row">
     <!-- Weekly Trends -->
     <div class="col-md-6 mb-4">
-        <div class="card shadow-sm">
-            <div class="card-header bg-primary text-white">
-                <h5 class="mb-0">Weekly Attendance Trends</h5>
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Weekly Trends</h5>
+                <small title="Shows attendance status counts by day of the week (Mon-Sun). Helps identify which days have the most absences or late arrivals." class="text-white-50 cursor-help">
+                    <i class="bi bi-info-circle"></i>
+                </small>
             </div>
             <div class="card-body">
                 <canvas id="weeklyTrendsChart"></canvas>
@@ -23,9 +77,12 @@
 
     <!-- Monthly Trends -->
     <div class="col-md-6 mb-4">
-        <div class="card shadow-sm">
-            <div class="card-header bg-info text-white">
-                <h5 class="mb-0">Monthly Attendance Trends</h5>
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Monthly Trends</h5>
+                <small title="Shows attendance status counts by day of the month (1-31). Useful for spotting patterns across the month." class="text-white-50 cursor-help">
+                    <i class="bi bi-info-circle"></i>
+                </small>
             </div>
             <div class="card-body">
                 <canvas id="monthlyTrendsChart"></canvas>
@@ -33,18 +90,36 @@
         </div>
     </div>
 
-    <!-- Peak Arrival Times -->
-    <div class="col-md-12 mb-4">
-        <div class="card shadow-sm">
-            <div class="card-header bg-secondary">
-                <h5 class="mb-0">Peak Arrival Times (Morning)</h5>
+    <!-- Status Distribution & Peak Arrival -->
+    <div class="row">
+        <div class="col-md-4 mb-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">Overall Status</h5>
+                    <small title="Distribution of all attendance records in the selected period." class="text-white-50 cursor-help">
+                        <i class="bi bi-info-circle"></i>
+                    </small>
+                </div>
+                <div class="card-body">
+                    <canvas id="statusChart"></canvas>
+                </div>
             </div>
-            <div class="card-body">
-                <canvas id="peakArrivalChart"></canvas>
+        </div>
+
+        <div class="col-md-8 mb-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">Peak Arrival Times</h5>
+                    <small title="Line chart showing the number of user arrivals (Present/Late/etc.) by hour of the day." class="text-white-50 cursor-help">
+                        <i class="bi bi-info-circle"></i>
+                    </small>
+                </div>
+                <div class="card-body">
+                    <canvas id="peakArrivalChart"></canvas>
+                </div>
             </div>
         </div>
     </div>
-</div>
 
 <div class="row">
     <!-- Risk Predictions -->
@@ -78,24 +153,101 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
+    // Global Chart.js Defaults for Light Mode
+    Chart.defaults.color = '#212529';
+    Chart.defaults.borderColor = 'rgba(0, 0, 0, 0.1)'; 
+    
+    let weeklyChartInstance = null;
+    let monthlyChartInstance = null;
+    let peakChartInstance = null;
+    let statusChartInstance = null;
+
     document.addEventListener("DOMContentLoaded", function() {
-        fetch('/api/advanced_analytics_data')
+        // Set default dates (current month)
+        const now = new Date();
+        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        
+        document.getElementById('startDate').valueAsDate = firstDay;
+        document.getElementById('endDate').valueAsDate = lastDay;
+
+        loadAnalytics();
+
+        document.getElementById('filterForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            loadAnalytics();
+        });
+    });
+
+    function loadAnalytics() {
+        const start = document.getElementById('startDate').value;
+        const end = document.getElementById('endDate').value;
+        const type = document.getElementById('empType').value;
+        const user = document.getElementById('userFilter').value;
+
+        const params = new URLSearchParams({
+            start_date: start,
+            end_date: end,
+            employment_type: type,
+            user_id: user
+        });
+
+        fetch(`/api/advanced_analytics_data?${params.toString()}`)
             .then(response => response.json())
             .then(data => {
                 renderWeeklyChart(data.weekly_trends);
                 renderMonthlyChart(data.monthly_trends);
+                
+                // Peak Arrival
                 if (data.peak_arrival && Object.keys(data.peak_arrival).length > 0) {
                      renderPeakChart(data.peak_arrival);
+                } else {
+                    if (peakChartInstance) peakChartInstance.destroy();
                 }
+
+                // Status Distribution
+                if (data.status_distribution && data.status_distribution.labels.length > 0) {
+                    renderStatusChart(data.status_distribution);
+                } else {
+                    if (statusChartInstance) statusChartInstance.destroy();
+                }
+
                 renderRiskTable(data.risk_users);
             })
             .catch(error => console.error('Error loading analytics:', error));
-    });
+    }
+
+    function setDateRange(range) {
+        const now = new Date();
+        const startEl = document.getElementById('startDate');
+        const endEl = document.getElementById('endDate');
+        
+        if (range === 'today') {
+            startEl.valueAsDate = now;
+            endEl.valueAsDate = now;
+        } else if (range === 'week') {
+            const first = now.getDate() - now.getDay(); // First day is the day of the month - the day of the week
+            const firstDay = new Date(now.setDate(first));
+            const lastDay = new Date(now.setDate(first + 6));
+            startEl.valueAsDate = firstDay;
+            endEl.valueAsDate = lastDay;
+        } else if (range === 'month') {
+            const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+            const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+            startEl.valueAsDate = firstDay;
+            endEl.valueAsDate = lastDay;
+        }
+        
+        loadAnalytics();
+    }
 
     function renderMonthlyChart(data) {
         if (!data || data.labels.length === 0) return;
+        
         const ctx = document.getElementById('monthlyTrendsChart').getContext('2d');
-        new Chart(ctx, {
+        if (monthlyChartInstance) monthlyChartInstance.destroy();
+
+        monthlyChartInstance = new Chart(ctx, {
             type: 'bar',
             data: {
                 labels: data.labels,
@@ -103,17 +255,17 @@
                     {
                         label: 'Present',
                         data: data.present,
-                        backgroundColor: '#198754'
+                        backgroundColor: '#0d6efd'
                     },
                     {
                         label: 'Late',
                         data: data.late,
-                        backgroundColor: '#ffc107'
+                        backgroundColor: '#6c757d'
                     },
                     {
                         label: 'Absent',
                         data: data.absent,
-                        backgroundColor: '#dc3545'
+                        backgroundColor: '#adb5bd'
                     }
                 ]
             },
@@ -128,34 +280,24 @@
     }
 
     function renderWeeklyChart(data) {
+        if (!data || data.labels.length === 0) return;
         const ctx = document.getElementById('weeklyTrendsChart').getContext('2d');
-        new Chart(ctx, {
+        if (weeklyChartInstance) weeklyChartInstance.destroy();
+
+        weeklyChartInstance = new Chart(ctx, {
             type: 'bar',
             data: {
                 labels: data.labels,
                 datasets: [
-                    {
-                        label: 'Present',
-                        data: data.present,
-                        backgroundColor: '#198754'
-                    },
-                    {
-                        label: 'Late',
-                        data: data.late,
-                        backgroundColor: '#ffc107'
-                    },
-                    {
-                        label: 'Absent',
-                        data: data.absent,
-                        backgroundColor: '#dc3545'
-                    }
+                    { label: 'Present', data: data.present, backgroundColor: '#0d6efd' },
+                    { label: 'Late', data: data.late, backgroundColor: '#6c757d' },
+                    { label: 'Absent', data: data.absent, backgroundColor: '#adb5bd' }
                 ]
             },
             options: {
                 responsive: true,
                 scales: {
-                    x: { stacked: true },
-                    y: { stacked: true, beginAtZero: true }
+                    y: { beginAtZero: true, title: { display: true, text: 'Count' } }
                 }
             }
         });
@@ -163,23 +305,62 @@
 
     function renderPeakChart(data) {
         const ctx = document.getElementById('peakArrivalChart').getContext('2d');
-        new Chart(ctx, {
+        if (peakChartInstance) peakChartInstance.destroy();
+        
+        const hours = Object.keys(data).map(Number).sort((a, b) => a - b);
+        const counts = hours.map(h => data[h]);
+        const labels = hours.map(h => {
+            // Convert 24h to 12h AM/PM
+            const ampm = h >= 12 ? 'PM' : 'AM';
+            const h12 = h % 12 || 12;
+            return `${h12} ${ampm}`;
+        });
+        
+        peakChartInstance = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: data.labels,
+                labels: labels,
                 datasets: [{
                     label: 'Arrivals',
-                    data: data.data,
+                    data: counts,
                     borderColor: '#0d6efd',
-                    tension: 0.3,
+                    tension: 0.4,
                     fill: true,
-                    backgroundColor: 'rgba(13, 110, 253, 0.1)'
+                    backgroundColor: 'rgba(13, 110, 253, 0.15)'
                 }]
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 scales: {
-                    y: { beginAtZero: true }
+                    y: { beginAtZero: true, title: { display: true, text: 'Count' } },
+                    x: { title: { display: true, text: 'Hour' } }
+                }
+            }
+        });
+    }
+
+    function renderStatusChart(data) {
+        const ctx = document.getElementById('statusChart').getContext('2d');
+        if (statusChartInstance) statusChartInstance.destroy();
+
+        statusChartInstance = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: data.labels,
+                datasets: [{
+                    data: data.data,
+                    backgroundColor: data.colors,
+                    hoverOffset: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    }
                 }
             }
         });

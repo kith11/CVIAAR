@@ -4,6 +4,7 @@ import cv2
 import time
 import threading
 from datetime import datetime, timedelta
+import base64
 from flask import Flask, render_template, Response, request, redirect, url_for, jsonify, flash, session
 from functools import wraps
 from modules.models import db, User, Attendance
@@ -29,7 +30,7 @@ app.secret_key = os.getenv('SECRET_KEY', 'default_dev_key')
 app.config['ADMIN_PASSWORD'] = os.getenv('ADMIN_PASSWORD', 'admin123')
 
 # Ensure data directories exist
-os.makedirs('data/faces', exist_ok=True)
+os.makedirs(os.path.join(basedir, 'data', 'faces'), exist_ok=True)
 
 db.init_app(app)
 
@@ -39,6 +40,19 @@ def login_required(f):
     def decorated_function(*args, **kwargs):
         if not session.get('logged_in'):
             return redirect(url_for('login', next=request.url))
+        return f(*args, **kwargs)
+    return decorated_function
+
+# Kiosk Access decorator
+def kiosk_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Admin is always allowed
+        if session.get('logged_in'):
+            return f(*args, **kwargs)
+        # Check kiosk auth
+        if not session.get('kiosk_authorized'):
+            return redirect(url_for('kiosk_login'))
         return f(*args, **kwargs)
     return decorated_function
 
@@ -179,15 +193,15 @@ def generate_frames():
             # LBPH Confidence: Lower is better. 
             # 0 = Perfect match. 
             # < 50 is very strict. < 80 is loose.
-            # Adjusted to 65 based on feedback (too strict at 50).
-            if label != -1 and confidence < 65: 
+            # Adjusted to 80 based on feedback (too strict at 65).
+            if label != -1 and confidence < 80: 
                 if label == current_face_id:
                     consecutive_face_count += 1
                 else:
                     current_face_id = label
                     consecutive_face_count = 1
                 
-                if consecutive_face_count >= 3: # Require 3 consecutive frames
+                if consecutive_face_count >= 2: # Require 2 consecutive frames
                     is_consistent = True
             else:
                 consecutive_face_count = 0
@@ -364,7 +378,7 @@ def add_user():
     db.session.commit()
     
     # Create directory for user
-    user_dir = os.path.join('data/faces', str(new_user.id))
+    user_dir = os.path.join(basedir, 'data', 'faces', str(new_user.id))
     os.makedirs(user_dir, exist_ok=True)
     
     return redirect(url_for('enroll_page', user_id=new_user.id))
@@ -391,7 +405,7 @@ def add_user_by_id():
     db.session.add(new_user)
     db.session.commit()
     # Prepare face directory
-    user_dir = os.path.join('data/faces', str(new_user.id))
+    user_dir = os.path.join(basedir, 'data', 'faces', str(new_user.id))
     os.makedirs(user_dir, exist_ok=True)
     return redirect(url_for('enroll_page', user_id=new_user.id))
 
@@ -404,20 +418,42 @@ def enroll_page(user_id):
         return redirect(url_for('admin'))
     return render_template('enroll.html', user=user)
 
-@app.route('/api/capture/<int:user_id>')
+@app.route('/api/capture/<int:user_id>', methods=['GET', 'POST'])
 def api_capture(user_id):
-    user_dir = os.path.join('data/faces', str(user_id))
+    user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
     if not os.path.exists(user_dir):
         return jsonify({'status': 'error', 'message': 'User directory not found'}), 404
 
     # Count existing images
     existing = len([name for name in os.listdir(user_dir) if name.endswith('.jpg')])
-    if existing >= 10:
+    if existing >= 25:
         return jsonify({'status': 'complete', 'count': existing})
 
-    frame = camera.get_frame()
+    frame = None
+    
+    # Check for client-side image upload
+    if request.method == 'POST' and request.json and 'image' in request.json:
+        try:
+            image_data = request.json['image']
+            if 'base64,' in image_data:
+                image_data = image_data.split('base64,')[1]
+            img_bytes = base64.b64decode(image_data)
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        except Exception as e:
+            return jsonify({'status': 'error', 'message': f'Invalid image: {str(e)}'}), 400
+    
+    # Fallback to server-side camera
     if frame is None:
-        return jsonify({'status': 'error', 'message': 'Camera error'}), 500
+        if not camera:
+            return jsonify({'status': 'error', 'message': 'Camera not available'}), 500
+        frame = camera.get_frame()
+
+    if frame is None:
+        return jsonify({'status': 'error', 'message': 'Camera/Image error'}), 500
+
+    if not face_engine:
+         return jsonify({'status': 'error', 'message': 'Face Engine not available'}), 500
 
     faces = face_engine.detect_faces(frame)
     if faces:
@@ -436,6 +472,68 @@ def api_capture(user_id):
     
     return jsonify({'status': 'no_face', 'count': existing})
 
+@app.route('/api/recognize', methods=['POST'])
+def api_recognize():
+    if not request.json or 'image' not in request.json:
+        return jsonify({'status': 'error', 'message': 'No image provided'}), 400
+        
+    try:
+        image_data = request.json['image']
+        if 'base64,' in image_data:
+            image_data = image_data.split('base64,')[1]
+        img_bytes = base64.b64decode(image_data)
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Invalid image: {str(e)}'}), 400
+
+    if frame is None:
+        return jsonify({'status': 'error', 'message': 'Empty frame'}), 400
+
+    if not face_engine:
+         return jsonify({'status': 'error', 'message': 'Face Engine not available'}), 500
+
+    # Detect faces and mesh
+    faces_data = face_engine.detect_faces_mesh(frame)
+    
+    results = []
+    
+    for ((x, y, w, h), landmarks) in faces_data:
+        face_img = frame[y:y+h, x:x+w]
+        gray_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+        label, confidence = face_engine.recognize_face(gray_face)
+        
+        result = {
+            'rect': [int(x), int(y), int(w), int(h)],
+            'name': 'Unknown',
+            'status': 'unknown',
+            'verified': False
+        }
+        
+        if label != -1 and confidence < 80:
+             user = db.session.get(User, label)
+             if user:
+                 result['name'] = user.name
+                 result['status'] = 'recognized'
+                 # Update recognized_faces global cache
+                 recognized_faces[user.id] = time.time()
+                 
+                 # Check liveness
+                 ear = face_engine.check_liveness(landmarks, frame.shape[1], frame.shape[0])
+                 if ear < 0.20:
+                     verified_live_users[user.id] = time.time()
+                     result['liveness_detected'] = True
+                     
+                 # Check verification status
+                 last_live = verified_live_users.get(user.id, 0)
+                 if time.time() - last_live < 10.0:
+                     result['verified'] = True
+                     face_verification_cache[user.id] = time.time()
+                 
+        results.append(result)
+
+    return jsonify({'status': 'success', 'faces': results})
+
 @app.route('/api/train')
 def api_train():
     face_engine.train_model()
@@ -453,7 +551,7 @@ def delete_user(user_id):
         
         # Delete face images
         import shutil
-        user_dir = os.path.join('data/faces', str(user.id))
+        user_dir = os.path.join(basedir, 'data', 'faces', str(user.id))
         if os.path.exists(user_dir):
             shutil.rmtree(user_dir)
             
@@ -471,11 +569,13 @@ def edit_user(user_id):
     new_name = request.form.get('name')
     new_start = request.form.get('schedule_start')
     new_end = request.form.get('schedule_end')
+    employment_type = request.form.get('employment_type')
     
     if user and new_name:
         user.name = new_name
         if new_start: user.schedule_start = new_start
         if new_end: user.schedule_end = new_end
+        if employment_type: user.employment_type = employment_type
         db.session.commit()
         flash(f'User updated to {new_name}.', 'success')
     else:
@@ -489,10 +589,16 @@ def manual_attendance():
         user_id = int(user_id)
         user = db.session.get(User, user_id)
         if user:
-            # Check Verification Cache (Verified Face + Liveness)
+            # 1. Check if user is currently present (recognized in last 5 seconds)
+            last_seen = recognized_faces.get(user.id, 0)
+            if time.time() - last_seen > 5.0:
+                flash("User face not detected. Please stand in front of camera.", "warning")
+                return redirect(url_for('index'))
+
+            # 2. Check if user passed liveness verification (in last 20 seconds)
             last_verified = face_verification_cache.get(user.id, 0)
-            if time.time() - last_verified > 10.0:
-                flash("Face Verification Required. Please stand in front of the camera and wait for 'Verified' status.", "warning")
+            if time.time() - last_verified > 20.0:
+                flash("Face Verification Required. Please stand in front of the camera and blink.", "warning")
                 return redirect(url_for('index'))
 
             today = get_current_date()
@@ -532,10 +638,15 @@ def manual_logout():
         user_id = int(user_id)
         user = db.session.get(User, user_id)
         if user:
-            # Check Verification Cache
+            # Same strict checks for logout
+            last_seen = recognized_faces.get(user.id, 0)
+            if time.time() - last_seen > 5.0:
+                flash("User face not detected. Please stand in front of camera.", "warning")
+                return redirect(url_for('index'))
+
             last_verified = face_verification_cache.get(user.id, 0)
-            if time.time() - last_verified > 10.0:
-                flash("Face Verification Required. Please stand in front of the camera and wait for 'Verified' status.", "warning")
+            if time.time() - last_verified > 20.0:
+                flash("Face Verification Required.", "warning")
                 return redirect(url_for('index'))
 
             today = get_current_date()
@@ -655,6 +766,7 @@ def analytics():
         stats.append({
             'id': user.id,
             'name': user.name,
+            'employment_type': user.employment_type,
             'schedule_start': user.schedule_start or '06:00',
             'schedule_end': user.schedule_end or '19:00',
             'present': presents,
@@ -819,16 +931,39 @@ def generate_report():
 @app.route('/advanced_analytics')
 @login_required
 def advanced_analytics():
-    return render_template('analytics.html')
+    users = User.query.order_by(User.name).all()
+    return render_template('analytics.html', users=users)
 
 @app.route('/api/advanced_analytics_data')
 @login_required
 def advanced_analytics_data():
     engine = AnalyticsEngine(db.session)
+    
+    start_str = request.args.get('start_date')
+    end_str = request.args.get('end_date')
+    employment_type = request.args.get('employment_type')
+    user_id = request.args.get('user_id')
+    
+    start_date = None
+    end_date = None
+    
+    if start_str:
+        try:
+            start_date = datetime.strptime(start_str, '%Y-%m-%d')
+        except ValueError:
+            pass
+            
+    if end_str:
+        try:
+            end_date = datetime.strptime(end_str, '%Y-%m-%d')
+        except ValueError:
+            pass
+            
     return jsonify({
-        'weekly_trends': engine.get_weekly_trends(),
-        'monthly_trends': engine.get_monthly_trends(),
-        'peak_arrival': engine.get_peak_arrival_times() if hasattr(engine, 'get_peak_arrival_times') else {},
+        'weekly_trends': engine.get_weekly_trends(start_date, end_date, employment_type, user_id),
+        'monthly_trends': engine.get_monthly_trends(start_date, end_date, employment_type, user_id),
+        'peak_arrival': engine.get_peak_arrival_times(start_date, end_date, employment_type, user_id),
+        'status_distribution': engine.get_status_distribution(start_date, end_date, employment_type, user_id),
         'risk_users': engine.predict_risk_users()
     })
 
