@@ -3,11 +3,13 @@ import sys
 import cv2
 import time
 import threading
-from datetime import datetime, timedelta
 import base64
+import sqlite3
+from datetime import datetime, timedelta
 from flask import Flask, render_template, Response, request, redirect, url_for, jsonify, flash, session
 from functools import wraps
-from modules.models import db, User, Attendance
+from sqlalchemy.exc import SQLAlchemyError
+from modules.models import db, User, Attendance, AttendanceEdit, ExcuseNote
 from modules.camera import Camera
 from modules.face_engine import FaceEngine
 from modules.analytics_engine import AnalyticsEngine
@@ -19,21 +21,24 @@ load_dotenv()
 
 app = Flask(__name__)
 
-if getattr(sys, 'frozen', False):
+if getattr(sys, "frozen", False):
     basedir = os.path.dirname(sys.executable)
 else:
     basedir = os.path.abspath(os.path.dirname(__file__))
 
-supabase_db_url = os.getenv('SUPABASE_DB_URL')
+APP_ROLE = os.getenv("APP_ROLE", "LOCAL_KIOSK")
+DEVICE_ID = os.getenv("DEVICE_ID", "local-device")
+
+supabase_db_url = os.getenv("SUPABASE_DB_URL")
 if not supabase_db_url:
     raise RuntimeError("SUPABASE_DB_URL environment variable is required but not set.")
-app.config['SQLALCHEMY_DATABASE_URI'] = supabase_db_url
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.secret_key = os.getenv('SECRET_KEY', 'default_dev_key')
-app.config['ADMIN_PASSWORD'] = os.getenv('ADMIN_PASSWORD', 'admin123')
+app.config["SQLALCHEMY_DATABASE_URI"] = supabase_db_url
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.secret_key = os.getenv("SECRET_KEY", "default_dev_key")
+app.config["ADMIN_PASSWORD"] = os.getenv("ADMIN_PASSWORD", "admin123")
 
-# Ensure data directories exist
-os.makedirs(os.path.join(basedir, 'data', 'faces'), exist_ok=True)
+os.makedirs(os.path.join(basedir, "data", "faces"), exist_ok=True)
+os.makedirs(os.path.join(basedir, "data", "offline"), exist_ok=True)
 
 db.init_app(app)
 
@@ -60,32 +65,104 @@ def kiosk_required(f):
     return decorated_function
 
 # Initialize Camera and Face Engine
-# We will initialize camera globally but it's better to instantiate on demand or keep a singleton
-camera = Camera()
-face_engine = FaceEngine(
-    model_path=os.path.join(basedir, 'data', 'lbph_model.yml'),
-    faces_dir=os.path.join(basedir, 'data', 'faces')
-)
+if APP_ROLE == "LOCAL_KIOSK":
+    camera = Camera()
+    face_engine = FaceEngine(
+        model_path=os.path.join(basedir, "data", "lbph_model.yml"),
+        faces_dir=os.path.join(basedir, "data", "faces"),
+    )
+else:
+    camera = None
+    face_engine = None
 
 # Global variables
 attendance_cache = {}
 recognized_faces = {}
-scan_state = {'status': 'no_face', 'name': None, 'timestamp': 0}
-verified_live_users = {}  # Store timestamp of last liveness verification
-face_verification_cache = {} # Cache verified faces for manual entry
+scan_state = {"status": "no_face", "name": None, "timestamp": 0}
+verified_live_users = {}
+face_verification_cache = {}
+first_blink_times = {}
 AUTO_LOGOUT_TIME = "19:30"
 
 def get_current_date():
     return datetime.now().strftime('%Y-%m-%d')
 
+
+OFFLINE_DB_PATH = os.path.join(basedir, "data", "offline", "attendance_queue.db")
+
+
+def init_offline_db():
+    if APP_ROLE != "LOCAL_KIOSK":
+        return
+    conn = sqlite3.connect(OFFLINE_DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pending_attendance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            status TEXT NOT NULL,
+            device_id TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def enqueue_offline_attendance(user_id, timestamp, status):
+    if APP_ROLE != "LOCAL_KIOSK":
+        return
+    conn = sqlite3.connect(OFFLINE_DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO pending_attendance (user_id, timestamp, status, device_id) VALUES (?, ?, ?, ?)",
+        (user_id, timestamp.isoformat(), status, DEVICE_ID),
+    )
+    conn.commit()
+    conn.close()
+
+
+def sync_offline_attendance():
+    if APP_ROLE != "LOCAL_KIOSK":
+        return
+    if not os.path.exists(OFFLINE_DB_PATH):
+        return
+    conn = sqlite3.connect(OFFLINE_DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, user_id, timestamp, status, device_id FROM pending_attendance ORDER BY id"
+    )
+    rows = cur.fetchall()
+    for row_id, user_id, ts_str, status, device_id in rows:
+        try:
+            ts = datetime.fromisoformat(ts_str)
+        except ValueError:
+            ts = datetime.now()
+        rec = Attendance(
+            user_id=user_id,
+            status=status,
+            timestamp=ts,
+            device_id=device_id,
+        )
+        db.session.add(rec)
+        try:
+            db.session.commit()
+        except SQLAlchemyError:
+            db.session.rollback()
+            conn.close()
+            return
+        cur.execute("DELETE FROM pending_attendance WHERE id = ?", (row_id,))
+        conn.commit()
+    conn.close()
+
 def mark_attendance(user_id):
     today = get_current_date()
     
-    # Check if already marked for today
     if user_id in attendance_cache and attendance_cache[user_id] == today:
         return False
     
-    # Check DB to be sure (in case of restart)
     with app.app_context():
         existing = Attendance.query.filter_by(user_id=user_id).filter(
             db.func.date(Attendance.timestamp) == datetime.now().date()
@@ -118,12 +195,33 @@ def mark_attendance(user_id):
         else:
             status = 'On Time'
             
-        new_record = Attendance(user_id=user_id, status=status, timestamp=now)
+        new_record = Attendance(
+            user_id=user_id,
+            status=status,
+            timestamp=now,
+            device_id=DEVICE_ID,
+        )
         db.session.add(new_record)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except SQLAlchemyError:
+            db.session.rollback()
+            enqueue_offline_attendance(user_id, now, status)
         attendance_cache[user_id] = today
         print(f"Marked {status} for user {user_id}")
         return True
+
+
+@app.before_request
+def sync_offline_before_request():
+    if APP_ROLE != "LOCAL_KIOSK":
+        return
+    try:
+        sync_offline_attendance()
+    except SQLAlchemyError:
+        db.session.rollback()
+    except Exception:
+        pass
 
 def generate_frames():
     frame_count = 0
@@ -265,14 +363,20 @@ def generate_frames():
 
 @app.route('/')
 def index():
+    if APP_ROLE == "ADMIN_DASHBOARD":
+        return redirect(url_for('admin'))
     return render_template('index.html')
 
 @app.route('/viewer')
 def viewer():
+    if APP_ROLE != "LOCAL_KIOSK":
+        return redirect(url_for('admin'))
     return render_template('viewer.html')
 
 @app.route('/video_feed')
 def video_feed():
+    if APP_ROLE != "LOCAL_KIOSK":
+        return redirect(url_for('admin'))
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -412,6 +516,8 @@ def enroll_page(user_id):
 
 @app.route('/api/capture/<int:user_id>', methods=['GET', 'POST'])
 def api_capture(user_id):
+    if APP_ROLE != "LOCAL_KIOSK":
+        return jsonify({'status': 'error', 'message': 'Capture not available on this service'}), 404
     user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
     if not os.path.exists(user_dir):
         return jsonify({'status': 'error', 'message': 'User directory not found'}), 404
@@ -466,6 +572,8 @@ def api_capture(user_id):
 
 @app.route('/api/recognize', methods=['POST'])
 def api_recognize():
+    if APP_ROLE != "LOCAL_KIOSK":
+        return jsonify({'status': 'error', 'message': 'Face recognition not available on this service'}), 404
     if not request.json or 'image' not in request.json:
         return jsonify({'status': 'error', 'message': 'No image provided'}), 400
         
@@ -507,20 +615,22 @@ def api_recognize():
              if user:
                  result['name'] = user.name
                  result['status'] = 'recognized'
-                 # Update recognized_faces global cache
                  recognized_faces[user.id] = time.time()
                  
-                 # Check liveness
                  ear = face_engine.check_liveness(landmarks, frame.shape[1], frame.shape[0])
+                 now_ts = time.time()
                  if ear < 0.20:
-                     verified_live_users[user.id] = time.time()
-                     result['liveness_detected'] = True
-                     
-                 # Check verification status
-                 last_live = verified_live_users.get(user.id, 0)
-                 if time.time() - last_live < 10.0:
-                     result['verified'] = True
-                     face_verification_cache[user.id] = time.time()
+                     first_time = first_blink_times.get(user.id)
+                     if not first_time:
+                         first_blink_times[user.id] = now_ts
+                         result['liveness_detected'] = True
+                     else:
+                         if now_ts - first_time >= 10.0:
+                             verified_live_users[user.id] = now_ts
+                             face_verification_cache[user.id] = now_ts
+                             first_blink_times.pop(user.id, None)
+                             result['liveness_detected'] = True
+                             result['verified'] = True
                  
         results.append(result)
 
@@ -528,6 +638,8 @@ def api_recognize():
 
 @app.route('/api/train')
 def api_train():
+    if APP_ROLE != "LOCAL_KIOSK":
+        return jsonify({'status': 'error', 'message': 'Training not available on this service'}), 404
     face_engine.train_model()
     return jsonify({'status': 'success'})
 
@@ -632,10 +744,15 @@ def manual_logout():
             if existing:
                 flash('Already logged out today.', 'warning')
             else:
-                rec = Attendance(user_id=user.id, status='Logout', timestamp=now)
+                rec = Attendance(user_id=user.id, status='Logout', timestamp=now, device_id=DEVICE_ID)
                 db.session.add(rec)
-                db.session.commit()
-                flash('Logout recorded.', 'success')
+                try:
+                    db.session.commit()
+                except SQLAlchemyError:
+                    db.session.rollback()
+                    enqueue_offline_attendance(user.id, now, 'Logout')
+                else:
+                    flash('Logout recorded.', 'success')
         else:
             flash('User ID not found.', 'danger')
     except ValueError:
@@ -665,8 +782,27 @@ def edit_attendance_log():
         
     log = db.session.get(Attendance, int(log_id))
     if log:
+        previous_status = log.status
+        previous_notes = log.notes
         log.status = status
         log.notes = notes
+        editor = session.get('admin_user', 'admin')
+        edit_entry = AttendanceEdit(
+            attendance_id=log.id,
+            previous_status=previous_status or '',
+            new_status=status or '',
+            previous_notes=previous_notes or '',
+            new_notes=notes or '',
+            edited_by=editor,
+        )
+        db.session.add(edit_entry)
+        if status == 'Excused' and notes:
+            excuse = ExcuseNote(
+                attendance_id=log.id,
+                note=notes,
+                created_by=editor,
+            )
+            db.session.add(excuse)
         db.session.commit()
         flash('Attendance record updated.', 'success')
     else:
@@ -753,22 +889,12 @@ def get_user_logs(user_id):
         'logs': log_data
     })
 
-# Helper to init DB
+last_auto_logout_date = None
+
 with app.app_context():
     db.create_all()
-    
-    # Simple migration: Check if employment_type exists in User table
-    from sqlalchemy import inspect
-    inspector = inspect(db.engine)
-    columns = [col['name'] for col in inspector.get_columns('user')]
-    if 'employment_type' not in columns:
-        print("Migrating DB: Adding employment_type to User table...")
-        with db.engine.connect() as conn:
-            conn.execute(db.text('ALTER TABLE user ADD COLUMN employment_type VARCHAR(20) DEFAULT "Full-time"'))
-            conn.commit()
+    init_offline_db()
 
-
-last_auto_logout_date = None
 
 def auto_logout_missing():
     today = get_current_date()
@@ -789,7 +915,7 @@ def auto_logout_missing():
             Attendance.status == 'Logout'
         ).first()
         if not exists:
-            rec = Attendance(user_id=uid, status='Logout', timestamp=auto_time)
+            rec = Attendance(user_id=uid, status='Logout', timestamp=auto_time, device_id=DEVICE_ID)
             db.session.add(rec)
     db.session.commit()
 
