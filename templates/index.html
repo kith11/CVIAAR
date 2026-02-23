@@ -225,7 +225,12 @@
         statusMsg.textContent = "Error: Browser does not support camera API.";
     }
 
+    let recognizeBusy = false;
+    let lastFaces = [];
+    let lastFacesTime = 0;
+
     function processFrame() {
+        if (recognizeBusy) return;
         if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
 
         // Sync overlay canvas size
@@ -237,6 +242,8 @@
         captureCanvas.height = video.videoHeight;
         captureCtx.drawImage(video, 0, 0);
         const dataURL = captureCanvas.toDataURL('image/jpeg', 0.7); 
+
+        recognizeBusy = true;
 
         fetch('/api/recognize', {
             method: 'POST',
@@ -253,6 +260,14 @@
             overlayCtx.scale(-1, 1);
             overlayCtx.translate(-overlayCanvas.width, 0);
             
+            if (data.status === 'success' && data.faces.length > 0) {
+                lastFaces = data.faces;
+                lastFacesTime = Date.now();
+            } else if (Date.now() - lastFacesTime < 1000 && lastFaces.length > 0) {
+                data.status = 'success';
+                data.faces = lastFaces;
+            }
+
             if (data.status === 'success' && data.faces.length > 0) {
                 let mainFace = data.faces[0]; 
                 
@@ -299,7 +314,10 @@
             }
             overlayCtx.restore();
         })
-        .catch(err => console.error("Recognition error:", err));
+        .catch(err => console.error("Recognition error:", err))
+        .finally(() => {
+            recognizeBusy = false;
+        });
     }
 
     // Auto-refresh page every 1 hour just to be safe with memory

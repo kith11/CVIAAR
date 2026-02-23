@@ -24,7 +24,10 @@ if getattr(sys, 'frozen', False):
 else:
     basedir = os.path.abspath(os.path.dirname(__file__))
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'data', 'attendance.db')
+supabase_db_url = os.getenv('SUPABASE_DB_URL')
+if not supabase_db_url:
+    raise RuntimeError("SUPABASE_DB_URL environment variable is required but not set.")
+app.config['SQLALCHEMY_DATABASE_URI'] = supabase_db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.secret_key = os.getenv('SECRET_KEY', 'default_dev_key')
 app.config['ADMIN_PASSWORD'] = os.getenv('ADMIN_PASSWORD', 'admin123')
@@ -70,11 +73,6 @@ recognized_faces = {}
 scan_state = {'status': 'no_face', 'name': None, 'timestamp': 0}
 verified_live_users = {}  # Store timestamp of last liveness verification
 face_verification_cache = {} # Cache verified faces for manual entry
-ATTEND_START = "06:00"
-ATTEND_END = "07:15"
-TARDY_THRESHOLD = "07:16"
-LOGOUT_START = "18:50"
-LOGOUT_END = "19:00"
 AUTO_LOGOUT_TIME = "19:30"
 
 def get_current_date():
@@ -97,28 +95,20 @@ def mark_attendance(user_id):
             attendance_cache[user_id] = today
             return False
 
-        # Determine status
         user = db.session.get(User, user_id)
         if not user:
             return False
 
         now = datetime.now()
         
-        # Parse Schedule from User or Defaults
-        sch_start_str = user.schedule_start or ATTEND_START
+        sch_start_str = user.schedule_start or "06:00"
         try:
             sch_start_dt = datetime.strptime(f"{today} {sch_start_str}", "%Y-%m-%d %H:%M")
         except ValueError:
-            # Fallback
-            sch_start_dt = datetime.strptime(f"{today} {ATTEND_START}", "%Y-%m-%d %H:%M")
+            sch_start_dt = datetime.strptime(f"{today} 06:00", "%Y-%m-%d %H:%M")
         
-        # Define Tardy Limit (e.g., +15 mins from start is On Time, >16 mins is Late)
-        # Assuming strict start time.
-        # Let's say Start is 06:00. On Time is until 07:15 (+1h 15m).
-        # We will keep the +1h 15m window for "On Time" to match original logic, relative to start.
         on_time_end = sch_start_dt + timedelta(hours=1, minutes=15)
         
-        # Attendance Window Start (e.g. 1 hour before start)
         window_start = sch_start_dt - timedelta(hours=1)
         
         if window_start <= now <= on_time_end:
@@ -126,8 +116,6 @@ def mark_attendance(user_id):
         elif now > on_time_end:
             status = 'Late'
         else:
-            # Too early? Let's count as On Time if within reasonable window, else maybe ignore?
-            # Original logic didn't check for "too early".
             status = 'On Time'
             
         new_record = Attendance(user_id=user_id, status=status, timestamp=now)
@@ -593,37 +581,16 @@ def manual_attendance():
         user_id = int(user_id)
         user = db.session.get(User, user_id)
         if user:
-            # 1. Check if user is currently present (recognized in last 5 seconds)
             last_seen = recognized_faces.get(user.id, 0)
             if time.time() - last_seen > 5.0:
                 flash("User face not detected. Please stand in front of camera.", "warning")
                 return redirect(url_for('index'))
 
-            # 2. Check if user passed liveness verification (in last 20 seconds)
             last_verified = face_verification_cache.get(user.id, 0)
             if time.time() - last_verified > 20.0:
                 flash("Face Verification Required. Please stand in front of the camera and blink.", "warning")
                 return redirect(url_for('index'))
 
-            today = get_current_date()
-            # Use User Schedule for window check if needed, but mark_attendance handles status.
-            # Here we just check if we are vaguely in the morning window?
-            # Original: attend_start = datetime.strptime(f"{today} {ATTEND_START}", "%Y-%m-%d %H:%M")
-            # We should probably respect user schedule here too.
-            
-            sch_start_str = user.schedule_start or ATTEND_START
-            try:
-                sch_start_dt = datetime.strptime(f"{today} {sch_start_str}", "%Y-%m-%d %H:%M")
-            except:
-                sch_start_dt = datetime.strptime(f"{today} {ATTEND_START}", "%Y-%m-%d %H:%M")
-                
-            # Allow attendance from 1 hour before start
-            window_start = sch_start_dt - timedelta(hours=1)
-            
-            if datetime.now() < window_start:
-                flash(f'Attendance window starts at {window_start.strftime("%H:%M")}', 'danger')
-                return redirect(url_for('index'))
-            
             marked = mark_attendance(user.id)
             if marked:
                 flash(f'Attendance confirmed for {user.name}', 'success')
@@ -642,7 +609,6 @@ def manual_logout():
         user_id = int(user_id)
         user = db.session.get(User, user_id)
         if user:
-            # Same strict checks for logout
             last_seen = recognized_faces.get(user.id, 0)
             if time.time() - last_seen > 5.0:
                 flash("User face not detected. Please stand in front of camera.", "warning")
@@ -654,38 +620,22 @@ def manual_logout():
                 return redirect(url_for('index'))
 
             today = get_current_date()
-            
-            # Use User Schedule
-            sch_end_str = user.schedule_end or LOGOUT_END
-            try:
-                sch_end_dt = datetime.strptime(f"{today} {sch_end_str}", "%Y-%m-%d %H:%M")
-            except:
-                sch_end_dt = datetime.strptime(f"{today} {LOGOUT_END}", "%Y-%m-%d %H:%M")
-            
-            # Logout Window: Schedule End - 30 mins to + 60 mins
-            logout_start = sch_end_dt - timedelta(minutes=30)
-            logout_end = sch_end_dt + timedelta(minutes=60)
-            
+            today_start = datetime.strptime(today, "%Y-%m-%d")
+            today_end = today_start + timedelta(days=1)
+            existing = Attendance.query.filter(
+                Attendance.user_id == user.id,
+                Attendance.timestamp >= today_start,
+                Attendance.timestamp < today_end,
+                Attendance.status == 'Logout'
+            ).first()
             now = datetime.now()
-            
-            if logout_start <= now <= logout_end:
-                today_start = datetime.strptime(today, "%Y-%m-%d")
-                today_end = today_start + timedelta(days=1)
-                existing = Attendance.query.filter(
-                    Attendance.user_id == user.id,
-                    Attendance.timestamp >= today_start,
-                    Attendance.timestamp < today_end,
-                    Attendance.status == 'Logout'
-                ).first()
-                if existing:
-                    flash('Already logged out today.', 'warning')
-                else:
-                    rec = Attendance(user_id=user.id, status='Logout', timestamp=now)
-                    db.session.add(rec)
-                    db.session.commit()
-                    flash('Logout recorded.', 'success')
+            if existing:
+                flash('Already logged out today.', 'warning')
             else:
-                flash(f'Logout window is {logout_start.strftime("%H:%M")}–{logout_end.strftime("%H:%M")}', 'warning')
+                rec = Attendance(user_id=user.id, status='Logout', timestamp=now)
+                db.session.add(rec)
+                db.session.commit()
+                flash('Logout recorded.', 'success')
         else:
             flash('User ID not found.', 'danger')
     except ValueError:

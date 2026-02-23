@@ -5,14 +5,11 @@ services:
       - "5000:5000"
     volumes:
       - ./data:/app/data
+    env_file:
+      - .env
     environment:
       - FLASK_ENV=production
-      - SECRET_KEY=your_secret_key_here
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     restart: unless-stopped
-
-  tunnel:
-    image: cloudflare/cloudflared:latest
-    command: tunnel --url http://web:5000
-    restart: unless-stopped
-    depends_on:
-      - web

@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt /app/
 
 # Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --default-timeout=600 --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application code
 COPY . /app

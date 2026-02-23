@@ -4,6 +4,7 @@ numpy
 pandas
 SQLAlchemy
 Flask-SQLAlchemy
+psycopg2-binary
 python-dotenv
 openai
 mediapipe==0.10.9
