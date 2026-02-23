@@ -7,153 +7,56 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
     <style>
-        :root {
-            --c-black: #000f08;
-            --c-pine: #136f63;
-            --c-citron: #e0ca3c;
-            --c-vermilion: #f34213;
-            --c-violet: #3e2f5b;
-            --c-text-light: #f8f9fa;
-            --c-text-muted: #adb5bd;
-            --c-card-bg: #1a1a1a;
-            --c-input-bg: #2d2d2d;
-        }
-
         body {
-            background-color: #f8f9fa;
+            background-color: #f5f5f5;
             color: #212529;
         }
 
-        /* Reset Bootstrap Overrides for Light Mode */
-        .text-dark { color: #212529 !important; }
-        .text-muted { color: #6c757d !important; }
-        .bg-white { background-color: #ffffff !important; color: #212529 !important; }
-        .bg-light { background-color: #f8f9fa !important; color: #212529 !important; }
-
-        /* Primary Color: Pine Green (Buttons/Accents) */
-        .bg-primary, .btn-primary {
-            background-color: var(--c-pine) !important;
-            border-color: var(--c-pine) !important;
-            color: white !important;
-        }
-        .btn-outline-primary {
-            color: var(--c-pine) !important;
-            border-color: var(--c-pine) !important;
-        }
-        .btn-outline-primary:hover {
-            background-color: var(--c-pine) !important;
-            color: white !important;
-        }
-        .text-primary { color: var(--c-pine) !important; }
-
-        /* Secondary Color: English Violet */
-        .bg-secondary, .btn-secondary {
-            background-color: var(--c-violet) !important;
-            border-color: var(--c-violet) !important;
-            color: white !important;
-        }
-        .bg-dark, .navbar-dark {
-            background-color: var(--c-violet) !important;
-        }
-        .btn-outline-secondary {
-            color: var(--c-violet) !important;
-            border-color: var(--c-violet) !important;
-        }
-        .btn-outline-secondary:hover {
-            background-color: var(--c-violet) !important;
-            color: white !important;
-        }
-        .text-secondary { color: var(--c-violet) !important; }
-        
-        /* Danger/Warning */
-        .bg-danger, .btn-danger {
-            background-color: var(--c-vermilion) !important;
-            border-color: var(--c-vermilion) !important;
-            color: white !important;
-        }
-        .btn-outline-danger {
-            color: var(--c-vermilion) !important;
-            border-color: var(--c-vermilion) !important;
-        }
-        .btn-outline-danger:hover {
-            background-color: var(--c-vermilion) !important;
-            color: white !important;
-        }
-        .text-danger { color: var(--c-vermilion) !important; }
-
-        .bg-warning, .btn-warning {
-            background-color: var(--c-citron) !important;
-            border-color: var(--c-citron) !important;
-            color: var(--c-black) !important;
-        }
-        .btn-outline-warning {
-            color: var(--c-citron) !important;
-            border-color: var(--c-citron) !important;
-        }
-        .btn-outline-warning:hover {
-            background-color: var(--c-citron) !important;
-            color: var(--c-black) !important;
-        }
-        .text-warning { color: var(--c-citron) !important; }
-
-        /* Success & Info Overrides to match Palette */
-        .bg-success, .btn-success {
-            background-color: var(--c-pine) !important;
-            border-color: var(--c-pine) !important;
-            color: white !important;
-        }
-        .text-success { color: var(--c-pine) !important; }
-
-        .bg-info, .btn-info {
-            background-color: var(--c-violet) !important;
-            border-color: var(--c-violet) !important;
-            color: white !important;
-        }
-        .text-info { color: var(--c-violet) !important; }
-
-        /* Cards & Components */
         .card {
             background-color: #ffffff;
-            border-color: rgba(0,0,0,0.125);
-            color: #212529;
+            border-color: rgba(0, 0, 0, 0.08);
         }
+
         .card-header {
-            border-bottom-color: rgba(0,0,0,0.125);
+            border-bottom-color: rgba(0, 0, 0, 0.08);
         }
-        
-        /* Form Elements */
-        .form-control, .form-select {
+
+        .form-control,
+        .form-select {
             background-color: #ffffff;
             border-color: #ced4da;
             color: #212529;
         }
-        .form-control:focus, .form-select:focus {
+
+        .form-control:focus,
+        .form-select:focus {
             background-color: #ffffff;
             color: #212529;
-            border-color: var(--c-pine);
-            box-shadow: 0 0 0 0.25rem rgba(19, 111, 99, 0.25);
+            border-color: #0d6efd;
+            box-shadow: 0 0 0 0.15rem rgba(13, 110, 253, 0.25);
         }
-        
-        /* Navbar */
-        .navbar-dark .navbar-brand { color: #ffffff !important; }
-        .navbar-dark .nav-link { color: rgba(255,255,255,0.85) !important; }
-        .navbar-dark .nav-link:hover { color: #ffffff !important; }
 
-        /* Tables */
+        .navbar-dark .navbar-brand {
+            color: #ffffff !important;
+        }
+
+        .navbar-dark .nav-link {
+            color: rgba(255, 255, 255, 0.8) !important;
+        }
+
+        .navbar-dark .nav-link:hover {
+            color: #ffffff !important;
+        }
+
         .table {
             color: #212529;
             border-color: #dee2e6;
         }
-        .table-striped > tbody > tr:nth-of-type(odd) > * {
-            color: #212529;
-            box-shadow: inset 0 0 0 9999px rgba(0,0,0,0.05);
-        }
-        
-        /* List Group */
+
         .list-group-item {
             background-color: #ffffff;
             color: #212529;
-            border-color: rgba(0,0,0,0.125);
+            border-color: rgba(0, 0, 0, 0.08);
         }
     </style>
 </head>
@@ -163,7 +66,6 @@
             <a class="navbar-brand" href="/"><i class="bi bi-journal-text me-2"></i>CVIAAR</a>
             <div class="navbar-nav">
                 <a class="nav-link" href="/">Camera</a>
-                <a class="nav-link" href="/viewer">Remote Viewer</a>
                 <a class="nav-link" href="/admin">Admin Panel</a>
             </div>
         </div>
@@ -181,10 +83,10 @@
 
     <!-- AI Chatbot Widget -->
     <div id="chatbot-widget" style="position: fixed; bottom: 20px; right: 20px; z-index: 1000;">
-        <button id="chatbot-toggle" class="btn btn-primary rounded-circle shadow-lg" style="width: 60px; height: 60px; font-size: 24px;">
+        <button id="chatbot-toggle" class="btn btn-primary rounded-circle" style="width: 60px; height: 60px; font-size: 24px;">
             <i class="bi bi-chat-dots"></i>
         </button>
-        <div id="chatbot-window" class="card shadow-lg d-none" style="position: absolute; bottom: 70px; right: 0; width: 350px; height: 500px; display: flex; flex-direction: column;">
+        <div id="chatbot-window" class="card d-none" style="position: absolute; bottom: 70px; right: 0; width: 350px; height: 500px; display: flex; flex-direction: column;">
             <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
                 <span><i class="bi bi-robot me-2"></i>Attendance Assistant</span>
                 <button id="chatbot-close" class="btn-close btn-close-white small"></button>

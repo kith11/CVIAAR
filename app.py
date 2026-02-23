@@ -367,12 +367,6 @@ def index():
         return redirect(url_for('admin'))
     return render_template('index.html')
 
-@app.route('/viewer')
-def viewer():
-    if APP_ROLE != "LOCAL_KIOSK":
-        return redirect(url_for('admin'))
-    return render_template('viewer.html')
-
 @app.route('/video_feed')
 def video_feed():
     if APP_ROLE != "LOCAL_KIOSK":
