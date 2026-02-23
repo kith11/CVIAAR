@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CVI-Attendance</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
     <style>
         :root {
             --c-black: #000f08;
@@ -159,7 +160,7 @@
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
         <div class="container">
-            <a class="navbar-brand" href="/">🗒️CVIAAR</a>
+            <a class="navbar-brand" href="/"><i class="bi bi-journal-text me-2"></i>CVIAAR</a>
             <div class="navbar-nav">
                 <a class="nav-link" href="/">Camera</a>
                 <a class="nav-link" href="/viewer">Remote Viewer</a>
@@ -181,11 +182,11 @@
     <!-- AI Chatbot Widget -->
     <div id="chatbot-widget" style="position: fixed; bottom: 20px; right: 20px; z-index: 1000;">
         <button id="chatbot-toggle" class="btn btn-primary rounded-circle shadow-lg" style="width: 60px; height: 60px; font-size: 24px;">
-            💬
+            <i class="bi bi-chat-dots"></i>
         </button>
         <div id="chatbot-window" class="card shadow-lg d-none" style="position: absolute; bottom: 70px; right: 0; width: 350px; height: 500px; display: flex; flex-direction: column;">
             <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-                <span>🤖 Attendance Assistant</span>
+                <span><i class="bi bi-robot me-2"></i>Attendance Assistant</span>
                 <button id="chatbot-close" class="btn-close btn-close-white small"></button>
             </div>
             <div class="card-body p-2" id="chatbot-messages" style="flex: 1; overflow-y: auto; background: #f8f9fa;">
@@ -198,7 +199,7 @@
             <div class="card-footer p-2">
                 <div class="input-group">
                     <input type="text" id="chatbot-input" class="form-control" placeholder="Type a message..." style="font-size: 14px;">
-                    <button id="chatbot-send" class="btn btn-primary">➤</button>
+                    <button id="chatbot-send" class="btn btn-primary"><i class="bi bi-send"></i></button>
                 </div>
             </div>
         </div>

@@ -6,9 +6,9 @@ class Camera:
     def __init__(self, source=0):
         try:
             self.video = cv2.VideoCapture(source)
-            # Set resolution to 1080p for better recognition accuracy
             self.video.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
             self.video.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+            self.video.set(cv2.CAP_PROP_FPS, 15)
         except Exception as e:
             print(f"Warning: Could not initialize camera: {e}")
             self.video = None

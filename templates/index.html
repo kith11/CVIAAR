@@ -3,7 +3,7 @@
 {% block content %}
 <div class="row mb-4 align-items-center">
     <div class="col-md-8">
-        <h2 class="fw-bold text-dark">📷 Live Attendance Monitor</h2>
+        <h2 class="fw-bold text-dark"><i class="bi bi-camera-video me-2"></i>Live Attendance Monitor</h2>
         <p class="text-muted">Real-time face recognition and attendance tracking.</p>
     </div>
     <div class="col-md-4 text-end">
@@ -24,7 +24,7 @@
                 </div>
                 
                 <div class="position-absolute top-0 end-0 m-3">
-                    <span class="badge bg-danger animate-pulse">● LIVE</span>
+                    <span class="badge bg-danger animate-pulse"><i class="bi bi-record-circle me-1"></i>Live</span>
                 </div>
                 <div id="status-overlay" class="position-absolute bottom-0 start-0 w-100 p-3 bg-dark bg-opacity-75 text-white">
                     <h3 class="mb-0 fw-bold" id="status-message">Initializing Camera...</h3>
@@ -52,7 +52,7 @@
             </div>
             <div class="card-footer bg-light text-center border-top-0 p-3" id="manual-entry-container">
                 <button class="btn btn-outline-primary w-100 py-2 fw-bold" data-bs-toggle="modal" data-bs-target="#manualEntryModal">
-                    ⌨️ Enter & Verify ID
+                    <i class="bi bi-keyboard me-2"></i>Enter & Verify ID
                 </button>
             </div>
         </div>
@@ -82,7 +82,7 @@
                     <button class="btn btn-outline-dark border-0 bg-light py-3 fs-5 rounded-3" onclick="loginAppend('9')">9</button>
                     <button class="btn btn-outline-danger border-0 bg-light py-3 fs-6 rounded-3" onclick="loginClear()">CLR</button>
                     <button class="btn btn-outline-dark border-0 bg-light py-3 fs-5 rounded-3" onclick="loginAppend('0')">0</button>
-                    <button class="btn btn-outline-secondary border-0 bg-light py-3 fs-6 rounded-3" onclick="loginBack()">⌫</button>
+                    <button class="btn btn-outline-secondary border-0 bg-light py-3 fs-6 rounded-3" onclick="loginBack()"><i class="bi bi-backspace"></i></button>
                 </div>
 
                 <form id="login-form" action="/manual_attendance" method="POST" style="display:none;">
@@ -202,7 +202,7 @@
     const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(window.location.hostname);
 
     if (isLocal && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } })
+        navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: { ideal: 15, max: 15 } } })
             .then(stream => {
                 video.srcObject = stream;
                 statusMsg.textContent = "Camera Active. Processing...";
@@ -263,7 +263,7 @@
             if (data.status === 'success' && data.faces.length > 0) {
                 lastFaces = data.faces;
                 lastFacesTime = Date.now();
-            } else if (Date.now() - lastFacesTime < 1000 && lastFaces.length > 0) {
+            } else if (Date.now() - lastFacesTime < 6000 && lastFaces.length > 0) {
                 data.status = 'success';
                 data.faces = lastFaces;
             }
