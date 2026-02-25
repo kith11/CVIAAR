@@ -27,29 +27,100 @@
             margin: 0;
             display: flex;
             min-height: 100vh;
+            flex-direction: column;
         }
 
-        /* Minimal Sidebar */
+        @media (min-width: 992px) {
+            body {
+                flex-direction: row;
+            }
+        }
+
+        /* Minimal Sidebar & Mobile Header */
         .sidebar {
-            width: var(--sidebar-width);
-            border-right: 1px solid var(--border-color);
-            padding: 2rem 1.5rem;
+            width: 100%;
+            border-right: none;
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 1.5rem;
             display: flex;
-            flex-direction: column;
-            position: fixed;
-            height: 100vh;
+            flex-direction: row;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            height: auto;
             background: var(--bg-color);
-            z-index: 100;
+            z-index: 1000;
+        }
+
+        @media (min-width: 992px) {
+            .sidebar {
+                width: var(--sidebar-width);
+                border-right: 1px solid var(--border-color);
+                border-bottom: none;
+                padding: 2rem 1.5rem;
+                flex-direction: column;
+                align-items: stretch;
+                justify-content: flex-start;
+                position: fixed;
+                height: 100vh;
+            }
         }
 
         .sidebar-brand {
             font-weight: 700;
             font-size: 1.2rem;
-            margin-bottom: 3rem;
+            margin-bottom: 0;
             display: flex;
             align-items: center;
             color: var(--text-main);
             text-decoration: none;
+        }
+
+        @media (min-width: 992px) {
+            .sidebar-brand {
+                margin-bottom: 3rem;
+            }
+        }
+
+        .sidebar-toggle {
+            display: block;
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            color: var(--text-main);
+        }
+
+        @media (min-width: 992px) {
+            .sidebar-toggle {
+                display: none;
+            }
+        }
+
+        .nav-container {
+            display: none;
+            flex-direction: column;
+            width: 100%;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: var(--bg-color);
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .nav-container.show {
+            display: flex;
+        }
+
+        @media (min-width: 992px) {
+            .nav-container {
+                display: flex;
+                position: static;
+                padding: 0;
+                border-bottom: none;
+                height: 100%;
+            }
         }
 
         .nav-link {
@@ -76,15 +147,29 @@
         /* Main Content */
         .main-content {
             flex: 1;
-            margin-left: var(--sidebar-width);
-            padding: 3rem 4rem;
-            max-width: 1200px;
+            margin-left: 0;
+            padding: 2rem 1.5rem;
+            max-width: 100%;
+        }
+
+        @media (min-width: 992px) {
+            .main-content {
+                margin-left: var(--sidebar-width);
+                padding: 3rem 4rem;
+                max-width: 1200px;
+            }
         }
 
         .section-title {
             font-weight: 700;
-            font-size: 2rem;
+            font-size: 1.75rem;
             margin-bottom: 0.5rem;
+        }
+
+        @media (min-width: 992px) {
+            .section-title {
+                font-size: 2rem;
+            }
         }
 
         .section-desc {
@@ -240,37 +325,45 @@
 </head>
 <body>
     <div class="sidebar">
-        <a class="sidebar-brand" href="/">
-            <i class="bi bi-journal-text"></i>
-            CVIAAR
-        </a>
-        <nav class="flex-column">
-            <a class="nav-link {{ 'active' if request.path == '/' }}" href="/">
-                <i class="bi bi-camera-video"></i>
-                Monitor
+        <div class="d-flex align-items-center justify-content-between w-100 d-lg-block">
+            <a class="sidebar-brand" href="/">
+                <i class="bi bi-journal-text"></i>
+                CVIAAR
             </a>
-            <a class="nav-link {{ 'active' if request.path == '/admin' }}" href="/admin">
-                <i class="bi bi-grid-1x2"></i>
-                Dashboard
-            </a>
-            <a class="nav-link {{ 'active' if request.path == '/advanced_analytics' }}" href="/advanced_analytics">
-                <i class="bi bi-graph-up"></i>
-                Analytics
-            </a>
-            <a class="nav-link {{ 'active' if request.path == '/audit_logs' }}" href="/audit_logs">
-                <i class="bi bi-shield-check"></i>
-                Audit Logs
-            </a>
-            <a class="nav-link {{ 'active' if request.path == '/staff_portal' }}" href="/staff_portal">
-                <i class="bi bi-person-badge"></i>
-                Staff Portal
-            </a>
-        </nav>
-        <div class="mt-auto">
-            <a class="nav-link" href="/logout">
-                <i class="bi bi-box-arrow-right"></i>
-                Sign Out
-            </a>
+            <button class="sidebar-toggle d-lg-none" id="sidebar-toggle">
+                <i class="bi bi-list"></i>
+            </button>
+        </div>
+        
+        <div class="nav-container" id="nav-container">
+            <nav class="flex-column">
+                <a class="nav-link {{ 'active' if request.path == '/' }}" href="/">
+                    <i class="bi bi-camera-video"></i>
+                    Monitor
+                </a>
+                <a class="nav-link {{ 'active' if request.path == '/admin' }}" href="/admin">
+                    <i class="bi bi-grid-1x2"></i>
+                    Dashboard
+                </a>
+                <a class="nav-link {{ 'active' if request.path == '/advanced_analytics' }}" href="/advanced_analytics">
+                    <i class="bi bi-graph-up"></i>
+                    Analytics
+                </a>
+                <a class="nav-link {{ 'active' if request.path == '/audit_logs' }}" href="/audit_logs">
+                    <i class="bi bi-shield-check"></i>
+                    Audit Logs
+                </a>
+                <a class="nav-link {{ 'active' if request.path == '/staff_portal' }}" href="/staff_portal">
+                    <i class="bi bi-person-badge"></i>
+                    Staff Portal
+                </a>
+            </nav>
+            <div class="mt-auto">
+                <a class="nav-link" href="/logout">
+                    <i class="bi bi-box-arrow-right"></i>
+                    Sign Out
+                </a>
+            </div>
         </div>
     </div>
 
@@ -289,26 +382,24 @@
     </div>
 
     <!-- AI Chatbot Widget -->
-    <div id="chatbot-widget" style="position: fixed; bottom: 20px; right: 20px; z-index: 1000;">
-        <button id="chatbot-toggle" class="btn btn-primary rounded-circle" style="width: 60px; height: 60px; font-size: 24px;">
+    <div id="chatbot-widget">
+        <button id="chatbot-toggle">
             <i class="bi bi-chat-dots"></i>
         </button>
-        <div id="chatbot-window" class="card d-none" style="position: absolute; bottom: 70px; right: 0; width: 350px; height: 500px; display: flex; flex-direction: column;">
-            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-robot me-2"></i>Attendance Assistant</span>
-                <button id="chatbot-close" class="btn-close btn-close-white small"></button>
+        <div id="chatbot-window" style="display: none;">
+            <div class="p-3 border-bottom d-flex justify-content-between align-items-center bg-light">
+                <h6 class="mb-0 fw-bold">AI Assistant</h6>
+                <button class="btn btn-sm btn-outline border-0" onclick="toggleChatbot()">
+                    <i class="bi bi-dash-lg"></i>
+                </button>
             </div>
-            <div class="card-body p-2" id="chatbot-messages" style="flex: 1; overflow-y: auto; background: #f8f9fa;">
-                <div class="d-flex flex-column gap-2">
-                    <div class="align-self-start bg-light p-2 rounded border" style="max-width: 80%;">
-                        Hello! I can help you with attendance rules and system info. How can I assist?
-                    </div>
-                </div>
-            </div>
-            <div class="card-footer p-2">
+            <div id="chatbot-messages" class="flex-grow-1 p-3 overflow-auto" style="font-size: 0.85rem;"></div>
+            <div class="p-3 border-top">
                 <div class="input-group">
-                    <input type="text" id="chatbot-input" class="form-control" placeholder="Type a message..." style="font-size: 14px;">
-                    <button id="chatbot-send" class="btn btn-primary"><i class="bi bi-send"></i></button>
+                    <input type="text" id="chatbot-input" class="form-control" placeholder="Ask a question...">
+                    <button class="btn btn-primary" onclick="sendMessage()">
+                        <i class="bi bi-send"></i>
+                    </button>
                 </div>
             </div>
         </div>
@@ -316,66 +407,46 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Chatbot Logic
-        document.addEventListener('DOMContentLoaded', function() {
-            const toggleBtn = document.getElementById('chatbot-toggle');
-            const closeBtn = document.getElementById('chatbot-close');
-            const chatWindow = document.getElementById('chatbot-window');
-            const messagesDiv = document.getElementById('chatbot-messages');
-            const inputField = document.getElementById('chatbot-input');
-            const sendBtn = document.getElementById('chatbot-send');
-
-            function toggleChat() {
-                chatWindow.classList.toggle('d-none');
-                if (!chatWindow.classList.contains('d-none')) {
-                    inputField.focus();
-                }
-            }
-
-            toggleBtn.addEventListener('click', toggleChat);
-            closeBtn.addEventListener('click', toggleChat);
-
-            function addMessage(text, isUser) {
-                const div = document.createElement('div');
-                div.className = isUser 
-                    ? 'align-self-end bg-primary text-white p-2 rounded mb-2' 
-                    : 'align-self-start bg-light p-2 rounded border mb-2';
-                div.style.maxWidth = '80%';
-                div.innerText = text;
-                const container = messagesDiv.querySelector('div');
-                container.appendChild(div);
-                messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            }
-
-            async function sendMessage() {
-                const text = inputField.value.trim();
-                if (!text) return;
-
-                addMessage(text, true);
-                inputField.value = '';
-                inputField.disabled = true;
-
-                try {
-                    const response = await fetch('/api/chat', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: text })
-                    });
-                    const data = await response.json();
-                    addMessage(data.response, false);
-                } catch (error) {
-                    addMessage("Sorry, I can't connect right now.", false);
-                } finally {
-                    inputField.disabled = false;
-                    inputField.focus();
-                }
-            }
-
-            sendBtn.addEventListener('click', sendMessage);
-            inputField.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') sendMessage();
+        // Sidebar Toggle for Mobile
+        const sidebarToggle = document.getElementById('sidebar-toggle');
+        const navContainer = document.getElementById('nav-container');
+        if (sidebarToggle) {
+            sidebarToggle.addEventListener('click', () => {
+                navContainer.classList.toggle('show');
             });
-        });
+        }
+
+        // Chatbot Logic
+        function toggleChatbot() {
+            const window = document.getElementById('chatbot-window');
+            window.style.display = window.style.display === 'none' ? 'flex' : 'none';
+        }
+        document.getElementById('chatbot-toggle').addEventListener('click', toggleChatbot);
+
+        async function sendMessage() {
+            const input = document.getElementById('chatbot-input');
+            const messages = document.getElementById('chatbot-messages');
+            const query = input.value.trim();
+            if (!query) return;
+
+            // Add user message
+            messages.innerHTML += `<div class="mb-3 text-end"><span class="bg-primary text-white p-2 rounded-3 d-inline-block">${query}</span></div>`;
+            input.value = '';
+            messages.scrollTop = messages.scrollHeight;
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query })
+                });
+                const data = await response.json();
+                messages.innerHTML += `<div class="mb-3"><span class="bg-light p-2 rounded-3 d-inline-block">${data.response}</span></div>`;
+                messages.scrollTop = messages.scrollHeight;
+            } catch (err) {
+                console.error('Chat error:', err);
+            }
+        }
     </script>
 </body>
 </html>

@@ -12,25 +12,25 @@
     </div>
 </div>
 
-<div class="row g-5">
+<div class="row g-4 g-lg-5">
     <!-- Live Feed Section -->
     <div class="col-lg-8">
-        <div class="card p-0 overflow-hidden border-0" style="background: #000; height: 500px;">
-            <div class="position-relative h-100 w-100">
-                <video id="video" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1);"></video>
+        <div class="card p-0 overflow-hidden border-0" style="background: #000; min-height: 300px; height: auto;">
+            <div class="position-relative w-100" style="padding-top: 56.25%;">
+                <video id="video" autoplay playsinline class="position-absolute top-0 start-0 w-100 h-100" style="object-fit: cover; transform: scaleX(-1);"></video>
                 <canvas id="overlay" class="position-absolute top-0 start-0 w-100 h-100"></canvas>
                 <canvas id="capture-canvas" style="display:none;"></canvas>
                 
-                <div class="position-absolute top-0 end-0 m-4">
+                <div class="position-absolute top-0 end-0 m-2 m-md-4">
                     <span class="badge bg-danger animate-pulse border-0">
                         <i class="bi bi-record-circle me-1"></i> LIVE
                     </span>
                 </div>
                 
-                <div id="status-overlay" class="position-absolute bottom-0 start-0 w-100 p-4 bg-dark bg-opacity-50 backdrop-blur" style="backdrop-filter: blur(10px);">
+                <div id="status-overlay" class="position-absolute bottom-0 start-0 w-100 p-3 p-md-4 bg-dark bg-opacity-50 backdrop-blur" style="backdrop-filter: blur(10px);">
                     <div class="d-flex align-items-center">
-                        <div class="spinner-grow spinner-grow-sm text-white me-3" role="status"></div>
-                        <h4 class="mb-0 fw-bold text-white" id="status-message">Initializing system...</h4>
+                        <div class="spinner-grow spinner-grow-sm text-white me-2 me-md-3" role="status"></div>
+                        <h5 class="mb-0 fw-bold text-white" id="status-message" style="font-size: 0.9rem; line-height: 1.2;">Initializing system...</h5>
                     </div>
                 </div>
             </div>
