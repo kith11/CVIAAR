@@ -6,78 +6,277 @@
     <title>CVI-Attendance</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-main: #111111;
+            --text-muted: #666666;
+            --accent: #000000;
+            --border-color: #eaeaea;
+            --card-bg: #ffffff;
+            --sidebar-width: 240px;
+        }
+
         body {
-            background-color: #f5f5f5;
-            color: #212529;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 14px;
+            letter-spacing: -0.01em;
+            margin: 0;
+            display: flex;
+            min-height: 100vh;
         }
 
+        /* Minimal Sidebar */
+        .sidebar {
+            width: var(--sidebar-width);
+            border-right: 1px solid var(--border-color);
+            padding: 2rem 1.5rem;
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            height: 100vh;
+            background: var(--bg-color);
+            z-index: 100;
+        }
+
+        .sidebar-brand {
+            font-weight: 700;
+            font-size: 1.2rem;
+            margin-bottom: 3rem;
+            display: flex;
+            align-items: center;
+            color: var(--text-main);
+            text-decoration: none;
+        }
+
+        .nav-link {
+            color: var(--text-muted);
+            padding: 0.8rem 0;
+            font-weight: 500;
+            transition: color 0.2s;
+            display: flex;
+            align-items: center;
+            border: none;
+            background: none;
+            text-decoration: none;
+        }
+
+        .nav-link:hover, .nav-link.active {
+            color: var(--text-main);
+        }
+
+        .nav-link i {
+            margin-right: 12px;
+            font-size: 1.1rem;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            margin-left: var(--sidebar-width);
+            padding: 3rem 4rem;
+            max-width: 1200px;
+        }
+
+        .section-title {
+            font-weight: 700;
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .section-desc {
+            color: var(--text-muted);
+            margin-bottom: 3rem;
+        }
+
+        /* Professional Cards */
         .card {
-            background-color: #ffffff;
-            border-color: rgba(0, 0, 0, 0.08);
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: none;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            transition: border-color 0.2s;
         }
 
-        .card-header {
-            border-bottom-color: rgba(0, 0, 0, 0.08);
+        .card:hover {
+            border-color: #ccc;
         }
 
-        .form-control,
-        .form-select {
-            background-color: #ffffff;
-            border-color: #ced4da;
-            color: #212529;
+        .card-title {
+            font-weight: 600;
+            font-size: 1rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
         }
 
-        .form-control:focus,
-        .form-select:focus {
-            background-color: #ffffff;
-            color: #212529;
-            border-color: #0d6efd;
-            box-shadow: 0 0 0 0.15rem rgba(13, 110, 253, 0.25);
+        /* Buttons */
+        .btn {
+            border-radius: 6px;
+            padding: 0.6rem 1.2rem;
+            font-weight: 500;
+            font-size: 0.9rem;
+            transition: all 0.2s;
         }
 
-        .navbar-dark .navbar-brand {
-            color: #ffffff !important;
+        .btn-primary {
+            background: var(--accent);
+            border: 1px solid var(--accent);
+            color: white;
         }
 
-        .navbar-dark .nav-link {
-            color: rgba(255, 255, 255, 0.8) !important;
+        .btn-primary:hover {
+            background: #333;
+            border-color: #333;
         }
 
-        .navbar-dark .nav-link:hover {
-            color: #ffffff !important;
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
         }
 
+        .btn-outline:hover {
+            border-color: var(--accent);
+            background: transparent;
+            color: var(--accent);
+        }
+
+        /* Form Inputs */
+        .form-control, .form-select {
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 0.7rem;
+            font-size: 0.9rem;
+            background: #fafafa;
+        }
+
+        .form-control:focus {
+            background: #fff;
+            border-color: var(--accent);
+            box-shadow: none;
+        }
+
+        /* Tables */
         .table {
-            color: #212529;
-            border-color: #dee2e6;
+            font-size: 0.9rem;
         }
 
-        .list-group-item {
-            background-color: #ffffff;
-            color: #212529;
-            border-color: rgba(0, 0, 0, 0.08);
+        .table thead th {
+            font-weight: 600;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 0.5rem;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.05em;
+        }
+
+        .table td {
+            padding: 1rem 0.5rem;
+            vertical-align: middle;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        /* Badge */
+        .badge {
+            font-weight: 500;
+            padding: 0.4em 0.8em;
+            border-radius: 4px;
+        }
+
+        /* D3 Chart Styles */
+        .d3-chart {
+            width: 100%;
+            height: 300px;
+        }
+        .bar { fill: var(--accent); }
+        .bar:hover { fill: #555; }
+        .axis-label { font-size: 10px; fill: var(--text-muted); }
+        .grid line { stroke: var(--border-color); stroke-opacity: 0.7; shape-rendering: crispEdges; }
+        .grid path { stroke-width: 0; }
+
+        /* AI Chatbot Widget - Professional Overhaul */
+        #chatbot-widget {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            z-index: 1000;
+        }
+
+        #chatbot-toggle {
+            width: 50px;
+            height: 50px;
+            background: var(--accent);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        #chatbot-window {
+            position: absolute;
+            bottom: 70px;
+            right: 0;
+            width: 380px;
+            height: 550px;
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 12px 32px rgba(0,0,0,0.15);
         }
     </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-        <div class="container">
-            <a class="navbar-brand" href="/"><i class="bi bi-journal-text me-2"></i>CVIAAR</a>
-            <div class="navbar-nav">
-                <a class="nav-link" href="/">Camera</a>
-                <a class="nav-link" href="/admin">Admin Panel</a>
-            </div>
+    <div class="sidebar">
+        <a class="sidebar-brand" href="/">
+            <i class="bi bi-journal-text"></i>
+            CVIAAR
+        </a>
+        <nav class="flex-column">
+            <a class="nav-link {{ 'active' if request.path == '/' }}" href="/">
+                <i class="bi bi-camera-video"></i>
+                Monitor
+            </a>
+            <a class="nav-link {{ 'active' if request.path == '/admin' }}" href="/admin">
+                <i class="bi bi-grid-1x2"></i>
+                Dashboard
+            </a>
+            <a class="nav-link {{ 'active' if request.path == '/advanced_analytics' }}" href="/advanced_analytics">
+                <i class="bi bi-graph-up"></i>
+                Analytics
+            </a>
+        </nav>
+        <div class="mt-auto">
+            <a class="nav-link" href="/logout">
+                <i class="bi bi-box-arrow-right"></i>
+                Sign Out
+            </a>
         </div>
-    </nav>
-    <div class="container mt-4">
+    </div>
+
+    <div class="main-content">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
-                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                    <div class="alert alert-{{ category if category != 'error' else 'danger' }} border-0 rounded-3 mb-4">
+                        {{ message }}
+                    </div>
                 {% endfor %}
             {% endif %}
         {% endwith %}
+        
         {% block content %}{% endblock %}
     </div>
 

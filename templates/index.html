@@ -1,129 +1,116 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="row mb-4 align-items-center">
-    <div class="col-md-8">
-        <h2 class="fw-bold text-dark"><i class="bi bi-camera-video me-2"></i>Live Attendance Monitor</h2>
-        <p class="text-muted">Real-time face recognition and attendance tracking.</p>
+<div class="mb-5 d-flex justify-content-between align-items-center">
+    <div>
+        <h1 class="section-title">Live Monitor</h1>
+        <p class="section-desc">Real-time biometric attendance tracking</p>
     </div>
-    <div class="col-md-4 text-end">
-        <div class="h4 mb-0" id="clock-time">--:--</div>
-        <div class="small text-muted" id="clock-date">-- -- ----</div>
+    <div class="text-end">
+        <div class="h2 fw-bold mb-0" id="clock-time">--:--</div>
+        <div class="small text-muted text-uppercase fw-bold" id="clock-date">-- -- ----</div>
     </div>
 </div>
 
-<div class="row">
+<div class="row g-5">
     <!-- Live Feed Section -->
-    <div class="col-lg-8 mb-4">
-        <div class="card border-0 rounded-3 overflow-hidden">
-            <div class="card-body p-0 bg-black text-center position-relative">
-                <div class="position-relative" style="width: 100%; min-height: 480px;">
-                    <video id="video" autoplay playsinline class="img-fluid" style="width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1);"></video>
-                    <canvas id="overlay" class="position-absolute top-0 start-0 w-100 h-100"></canvas>
-                    <canvas id="capture-canvas" style="display:none;"></canvas>
+    <div class="col-lg-8">
+        <div class="card p-0 overflow-hidden border-0" style="background: #000; height: 500px;">
+            <div class="position-relative h-100 w-100">
+                <video id="video" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1);"></video>
+                <canvas id="overlay" class="position-absolute top-0 start-0 w-100 h-100"></canvas>
+                <canvas id="capture-canvas" style="display:none;"></canvas>
+                
+                <div class="position-absolute top-0 end-0 m-4">
+                    <span class="badge bg-danger animate-pulse border-0">
+                        <i class="bi bi-record-circle me-1"></i> LIVE
+                    </span>
                 </div>
                 
-                <div class="position-absolute top-0 end-0 m-3">
-                    <span class="badge bg-danger animate-pulse"><i class="bi bi-record-circle me-1"></i>Live</span>
-                </div>
-                <div id="status-overlay" class="position-absolute bottom-0 start-0 w-100 p-3 bg-dark bg-opacity-75 text-white">
-                    <h3 class="mb-0 fw-bold" id="status-message">Initializing Camera...</h3>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Sidebar: Recent Activity & Actions -->
-    <div class="col-lg-4">
-        <!-- ... (rest of sidebar) ... -->
-        <div class="card border-0 mb-4 h-100">
-            <div class="card-header bg-white border-bottom-0 pt-3 pb-0 d-flex justify-content-between align-items-center">
-                <h5 class="fw-bold mb-0">Recent Activity</h5>
-                <span class="badge bg-light text-dark border">Real-time</span>
-            </div>
-            <div class="card-body p-0">
-                <div class="list-group list-group-flush" id="recent-logs-list" style="max-height: 400px; overflow-y: auto;">
-                    <!-- JS will populate this -->
-                    <div class="text-center p-4 text-muted">
-                        <div class="spinner-border spinner-border-sm mb-2" role="status"></div>
-                        <p class="small mb-0">Loading attendance logs...</p>
+                <div id="status-overlay" class="position-absolute bottom-0 start-0 w-100 p-4 bg-dark bg-opacity-50 backdrop-blur" style="backdrop-filter: blur(10px);">
+                    <div class="d-flex align-items-center">
+                        <div class="spinner-grow spinner-grow-sm text-white me-3" role="status"></div>
+                        <h4 class="mb-0 fw-bold text-white" id="status-message">Initializing system...</h4>
                     </div>
                 </div>
             </div>
-            <div class="card-footer bg-light text-center border-top-0 p-3" id="manual-entry-container">
-                <button class="btn btn-outline-primary w-100 py-2 fw-bold" data-bs-toggle="modal" data-bs-target="#manualEntryModal">
-                    <i class="bi bi-keyboard me-2"></i>Enter & Verify ID
-                </button>
+        </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="col-lg-4">
+        <!-- Manual Entry -->
+        <div class="card mb-4 text-center">
+            <div class="card-title justify-content-center">Biometric Bypass</div>
+            <p class="text-muted small mb-4">Manual ID verification if facial recognition is unavailable.</p>
+            <button class="btn btn-primary w-100 py-3 fw-bold" data-bs-toggle="modal" data-bs-target="#manualEntryModal">
+                <i class="bi bi-keyboard me-2"></i>Enter ID
+            </button>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="card p-0 overflow-hidden">
+            <div class="p-4 border-bottom d-flex justify-content-between align-items-center">
+                <div class="fw-bold small text-uppercase">Recent Activity</div>
+                <span class="badge bg-light text-dark border-0 small">REAL-TIME</span>
+            </div>
+            <div class="list-group list-group-flush" id="recent-logs-list" style="max-height: 300px; overflow-y: auto;">
+                <div class="text-center py-5 text-muted">
+                    <div class="spinner-border spinner-border-sm mb-2"></div>
+                    <div class="small">Syncing logs...</div>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Manual Entry Modal -->
+<!-- Manual Entry Modal - Professional Overhaul -->
 <div class="modal fade" id="manualEntryModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-sm modal-dialog-centered">
-        <div class="modal-content border-0">
-            <div class="modal-header bg-primary text-white border-0">
-                <h5 class="modal-title">Enter ID</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+        <div class="modal-content border-0 p-4">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h5 class="fw-bold mb-0">Identity Access</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            <div class="modal-body p-4">
-                <div id="login-readout" class="display-6 fw-bold text-center mb-4 text-primary border-bottom pb-2" style="min-height: 50px;"></div>
-                
-                <div class="d-grid gap-2 mb-3" style="grid-template-columns: repeat(3, 1fr); display: grid;">
-                    <button class="btn btn-outline-dark border-0 bg-light py-3 fs-5 rounded-3" onclick="loginAppend('1')">1</button>
-                    <button class="btn btn-outline-dark border-0 bg-light py-3 fs-5 rounded-3" onclick="loginAppend('2')">2</button>
-                    <button class="btn btn-outline-dark border-0 bg-light py-3 fs-5 rounded-3" onclick="loginAppend('3')">3</button>
-                    <button class="btn btn-outline-dark border-0 bg-light py-3 fs-5 rounded-3" onclick="loginAppend('4')">4</button>
-                    <button class="btn btn-outline-dark border-0 bg-light py-3 fs-5 rounded-3" onclick="loginAppend('5')">5</button>
-                    <button class="btn btn-outline-dark border-0 bg-light py-3 fs-5 rounded-3" onclick="loginAppend('6')">6</button>
-                    <button class="btn btn-outline-dark border-0 bg-light py-3 fs-5 rounded-3" onclick="loginAppend('7')">7</button>
-                    <button class="btn btn-outline-dark border-0 bg-light py-3 fs-5 rounded-3" onclick="loginAppend('8')">8</button>
-                    <button class="btn btn-outline-dark border-0 bg-light py-3 fs-5 rounded-3" onclick="loginAppend('9')">9</button>
-                    <button class="btn btn-outline-danger border-0 bg-light py-3 fs-6 rounded-3" onclick="loginClear()">CLR</button>
-                    <button class="btn btn-outline-dark border-0 bg-light py-3 fs-5 rounded-3" onclick="loginAppend('0')">0</button>
-                    <button class="btn btn-outline-secondary border-0 bg-light py-3 fs-6 rounded-3" onclick="loginBack()"><i class="bi bi-backspace"></i></button>
-                </div>
+            
+            <div id="login-readout" class="h1 fw-bold text-center mb-4 py-3 border-bottom" style="letter-spacing: 0.2em; min-height: 70px; color: var(--accent);"></div>
+            
+            <div class="d-grid gap-2 mb-4" style="grid-template-columns: repeat(3, 1fr); display: grid;">
+                {% for i in range(1, 10) %}
+                <button class="btn btn-outline py-3 fs-5" onclick="loginAppend('{{ i }}')">{{ i }}</button>
+                {% endfor %}
+                <button class="btn btn-outline py-3 text-danger small" onclick="loginClear()">CLR</button>
+                <button class="btn btn-outline py-3 fs-5" onclick="loginAppend('0')">0</button>
+                <button class="btn btn-outline py-3" onclick="loginBack()"><i class="bi bi-backspace"></i></button>
+            </div>
 
-                <form id="login-form" action="/manual_attendance" method="POST" style="display:none;">
-                    <input type="hidden" name="user_id" id="login-user-id">
-                </form>
-                <form id="logout-form" action="/manual_logout" method="POST" style="display:none;">
-                    <input type="hidden" name="user_id" id="logout-user-id">
-                </form>
+            <form id="login-form" action="/manual_attendance" method="POST" style="display:none;">
+                <input type="hidden" name="user_id" id="login-user-id">
+            </form>
+            <form id="logout-form" action="/manual_logout" method="POST" style="display:none;">
+                <input type="hidden" name="user_id" id="logout-user-id">
+            </form>
 
-                <div class="d-grid gap-2">
-                    <button class="btn btn-success py-2" onclick="loginSubmit()">Log-in</button>
-                    <button class="btn btn-warning py-2 text-dark" onclick="logoutSubmit()">Logout (End Shift)</button>
-                </div>
+            <div class="d-grid gap-2">
+                <button class="btn btn-primary py-3 fw-bold" onclick="loginSubmit()">CHECK IN</button>
+                <button class="btn btn-outline py-3 small" onclick="logoutSubmit()">CHECK OUT</button>
             </div>
         </div>
     </div>
 </div>
 
 <style>
-    .animate-pulse {
-        animation: pulse 1.5s infinite;
-    }
-    @keyframes pulse {
-        0% { opacity: 1; }
-        50% { opacity: 0.5; }
-        100% { opacity: 1; }
-    }
-    .list-group-item {
-        transition: background-color 0.2s;
-    }
-    .list-group-item:hover {
-        background-color: #f8f9fa;
-    }
+    .animate-pulse { animation: pulse 2s infinite; }
+    @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
+    .backdrop-blur { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 </style>
 
 <script>
-    // Clock
+    // Clock Logic
     function updateClock() {
         const now = new Date();
-        document.getElementById('clock-time').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        document.getElementById('clock-date').textContent = now.toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        document.getElementById('clock-time').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        document.getElementById('clock-date').textContent = now.toLocaleDateString([], { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
     }
     setInterval(updateClock, 1000);
     updateClock();
@@ -143,13 +130,13 @@
     function loginClear() { loginReadout().textContent = ''; }
     function loginSubmit() {
         const val = loginReadout().textContent.trim();
-        if (!val) { alert('Enter ID'); return; }
+        if (!val) return;
         document.getElementById('login-user-id').value = val;
         document.getElementById('login-form').submit();
     }
     function logoutSubmit() {
         const val = loginReadout().textContent.trim();
-        if (!val) { alert('Enter ID'); return; }
+        if (!val) return;
         document.getElementById('logout-user-id').value = val;
         document.getElementById('logout-form').submit();
     }
@@ -161,20 +148,20 @@
             .then(data => {
                 const list = document.getElementById('recent-logs-list');
                 if (data.length === 0) {
-                    list.innerHTML = '<div class="text-center p-3 text-muted">No recent activity.</div>';
+                    list.innerHTML = '<div class="text-center py-5 text-muted small">No recent logs</div>';
                     return;
                 }
                 
                 let html = '';
                 data.forEach(log => {
                     html += `
-                        <div class="list-group-item px-3 py-2 border-0 border-bottom">
+                        <div class="list-group-item border-0 border-bottom p-3">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
-                                    <h6 class="mb-0 fw-bold text-truncate" style="max-width: 150px;">${log.name}</h6>
-                                    <small class="text-muted">${log.time}</small>
+                                    <div class="fw-bold small">${log.name}</div>
+                                    <div class="text-muted smaller" style="font-size: 0.7rem;">${log.time}</div>
                                 </div>
-                                <span class="badge bg-${log.color} rounded-pill">${log.status}</span>
+                                <span class="badge bg-${log.color} bg-opacity-10 text-${log.color} border-0 small">${log.status}</span>
                             </div>
                         </div>
                     `;
@@ -184,11 +171,10 @@
             .catch(err => console.error('Error fetching logs:', err));
     }
 
-    // Fetch immediately and then every 3 seconds
     fetchRecentLogs();
-    setInterval(fetchRecentLogs, 3000);
+    setInterval(fetchRecentLogs, 5000);
     
-    // Camera & Recognition Logic
+    // Recognition Engine Integration
     const video = document.getElementById('video');
     const overlayCanvas = document.getElementById('overlay');
     const overlayCtx = overlayCanvas.getContext('2d');
@@ -197,32 +183,21 @@
     const statusMsg = document.getElementById('status-message');
     const statusOverlay = document.getElementById('status-overlay');
 
-    // Start Camera
-    // Only start camera if on localhost
     const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(window.location.hostname);
 
     if (isLocal && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: { ideal: 15, max: 15 } } })
             .then(stream => {
                 video.srcObject = stream;
-                statusMsg.textContent = "Camera Active. Processing...";
-                // Start processing loop
-                setInterval(processFrame, 300); // ~3 FPS
+                statusMsg.textContent = "Scanning for identity...";
+                setInterval(processFrame, 400); 
             })
             .catch(err => {
-                console.error("Camera error:", err);
-                statusMsg.textContent = "Error: Camera access denied. Check permissions.";
-                statusOverlay.className = 'position-absolute bottom-0 start-0 w-100 p-3 bg-danger text-white';
+                statusMsg.textContent = "Camera access denied";
+                statusOverlay.classList.add('bg-danger');
             });
-    } else if (!isLocal) {
-        // Remote Mode
-        statusMsg.textContent = "Remote Monitoring Mode. Camera Disabled.";
-        statusOverlay.className = 'position-absolute bottom-0 start-0 w-100 p-3 bg-secondary text-white';
-        // Hide video element to avoid confusion
-        video.style.opacity = '0.1';
-        // Still fetch logs
     } else {
-        statusMsg.textContent = "Error: Browser does not support camera API.";
+        statusMsg.textContent = "System in remote standby";
     }
 
     let recognizeBusy = false;
@@ -230,24 +205,74 @@
     let lastFacesTime = 0;
 
     function processFrame() {
-        if (recognizeBusy) return;
-        if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+        if (recognizeBusy || video.readyState !== video.HAVE_ENOUGH_DATA) return;
 
-        // Sync overlay canvas size
         overlayCanvas.width = video.videoWidth;
         overlayCanvas.height = video.videoHeight;
-        
-        // Capture frame
         captureCanvas.width = video.videoWidth;
         captureCanvas.height = video.videoHeight;
         captureCtx.drawImage(video, 0, 0);
-        const dataURL = captureCanvas.toDataURL('image/jpeg', 0.7); 
+        const dataURL = captureCanvas.toDataURL('image/jpeg', 0.6); 
 
         recognizeBusy = true;
 
         fetch('/api/recognize', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: dataURL })
+        })
+        .then(response => response.json())
+        .then(data => {
+            overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            overlayCtx.save();
+            overlayCtx.scale(-1, 1);
+            overlayCtx.translate(-overlayCanvas.width, 0);
+            
+            if (data.status === 'success' && data.faces.length > 0) {
+                lastFaces = data.faces;
+                lastFacesTime = Date.now();
+            } else if (Date.now() - lastFacesTime < 20000 && lastFaces.length > 0) {
+                data.status = 'success';
+                data.faces = lastFaces;
+            }
+
+            if (data.status === 'success' && data.faces.length > 0) {
+                let mainFace = data.faces[0]; 
+                
+                data.faces.forEach(face => {
+                    const [x, y, w, h] = face.rect;
+                    overlayCtx.lineWidth = 2;
+                    overlayCtx.strokeStyle = face.verified ? '#000' : '#666';
+                    overlayCtx.strokeRect(x, y, w, h);
+                    
+                    // Label
+                    overlayCtx.scale(-1, 1);
+                    overlayCtx.font = "600 14px Inter, sans-serif";
+                    overlayCtx.fillStyle = "#000";
+                    overlayCtx.fillText(face.name.toUpperCase(), -(x + w), y - 10);
+                    overlayCtx.scale(-1, 1);
+                });
+
+                if (mainFace.verified) {
+                    statusMsg.innerHTML = `IDENTITY VERIFIED: ${mainFace.name.toUpperCase()}`;
+                    statusOverlay.style.background = "rgba(0,0,0,0.8)";
+                } else if (mainFace.status === 'recognized') {
+                    statusMsg.innerHTML = `HELLO ${mainFace.name.toUpperCase()} — PLEASE BLINK`;
+                } else {
+                    statusMsg.innerHTML = 'IDENTITY UNKNOWN';
+                }
+            } else {
+                if (lastFaces.length === 0) {
+                    statusMsg.innerHTML = 'SCANNING FOR IDENTITY...';
+                    statusOverlay.style.background = "rgba(0,0,0,0.5)";
+                }
+            }
+            overlayCtx.restore();
+        })
+        .finally(() => recognizeBusy = false);
+    }
+</script>
+{% endblock %}
             body: JSON.stringify({ image: dataURL })
         })
         .then(response => response.json())

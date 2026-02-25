@@ -1,193 +1,242 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <div>
-        <h2 class="fw-bold text-dark mb-0">Admin Dashboard</h2>
-        <p class="text-muted mb-0">Overview and Management</p>
-    </div>
-    <div>
-        <span class="badge bg-light text-dark border px-3 py-2 fs-6 shadow-sm">
-            <script>document.write(new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }));</script>
-        </span>
-    </div>
+<div class="mb-5">
+    <h1 class="section-title">Dashboard</h1>
+    <p class="section-desc">Overview and attendance management</p>
 </div>
 
-<div class="row g-4">
-    <!-- LEFT COLUMN: Actions & Registration -->
-    <div class="col-lg-4">
-        
-        <!-- Registration Card -->
-        <div class="card shadow-sm border-0 mb-4">
-            <div class="card-header bg-white py-3 border-bottom">
-                <h5 class="mb-0 fw-bold text-primary"><i class="bi bi-person-plus me-2"></i>New User Registration</h5>
-            </div>
-            <div class="card-body">
-                <form action="/add_user" method="POST">
-                    <div class="form-floating mb-3">
-                        <input type="number" name="user_id" class="form-control" id="userId" placeholder="Auto">
-                        <label for="userId">User ID (Optional)</label>
-                    </div>
-                    <div class="form-floating mb-3">
-                        <input type="text" name="name" class="form-control" id="userName" required placeholder="Name">
-                        <label for="userName">Full Name</label>
-                    </div>
-                    <div class="form-floating mb-3">
-                        <select name="employment_type" class="form-select" id="employmentType">
-                            <option value="Full-time" selected>Full-time</option>
-                            <option value="Part-time">Part-time</option>
-                        </select>
-                        <label for="employmentType">Employment Type</label>
-                    </div>
-                    <button type="submit" class="btn btn-primary w-100 fw-bold py-2">Register & Capture</button>
-                </form>
-            </div>
-        </div>
-
-        <!-- System Controls Card -->
-        <div class="card shadow-sm border-0 mb-4">
-            <div class="card-header bg-white py-3 border-bottom">
-                <h5 class="mb-0 fw-bold text-secondary"><i class="bi bi-gear me-2"></i>System Controls</h5>
-            </div>
-            <div class="card-body d-flex flex-column gap-2">
-                <a href="{{ url_for('advanced_analytics') }}" class="btn btn-outline-primary w-100 text-start fw-semibold">
-                    <i class="bi bi-graph-up-arrow me-2"></i>Advanced Analytics
-                </a>
-                <a href="/train" class="btn btn-outline-warning w-100 text-start fw-semibold">
-                    <i class="bi bi-arrow-repeat me-2"></i>Retrain Face Model
-                </a>
-                <hr class="my-2">
-                <a href="/logout" class="btn btn-outline-danger w-100 text-start fw-semibold">
-                    <i class="bi bi-box-arrow-right me-2"></i>Logout System
-                </a>
-            </div>
-        </div>
-
-        <!-- Alerts Section -->
-        <div id="alerts-section" class="card border-0 shadow-sm border-start border-danger border-5 d-none">
-            <div class="card-body">
-                <h5 class="text-danger fw-bold mb-3"><i class="bi bi-exclamation-triangle me-2"></i>Attention Required</h5>
-                <ul id="alerts-list" class="mb-0 ps-3 text-muted small"></ul>
-            </div>
-        </div>
-
-    </div>
-
-    <!-- RIGHT COLUMN: Data Tables -->
+<div class="row g-5">
+    <!-- Main Section -->
     <div class="col-lg-8">
-        
-        <!-- Analytics Chart -->
-        <div class="card shadow-sm border-0 mb-4">
-            <div class="card-header bg-white py-3 border-bottom">
-                <h5 class="mb-0 fw-bold"><i class="bi bi-graph-up me-2"></i>Weekly Attendance Trends</h5>
+        <!-- Summary Stats -->
+        <div class="row mb-4 g-4">
+            <div class="col-md-3">
+                <div class="card p-3 mb-0 text-center">
+                    <div class="text-muted small text-uppercase fw-bold mb-1">Users</div>
+                    <div class="h3 fw-bold mb-0" id="total-users-count">-</div>
+                </div>
             </div>
-            <div class="card-body">
-                <canvas id="attendanceChart" height="100"></canvas>
+            <div class="col-md-3">
+                <div class="card p-3 mb-0 text-center">
+                    <div class="text-muted small text-uppercase fw-bold mb-1">Present</div>
+                    <div class="h3 fw-bold mb-0 text-success" id="total-present-count">-</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card p-3 mb-0 text-center">
+                    <div class="text-muted small text-uppercase fw-bold mb-1">Tardy</div>
+                    <div class="h3 fw-bold mb-0 text-warning" id="total-tardy-count">-</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card p-3 mb-0 text-center">
+                    <div class="text-muted small text-uppercase fw-bold mb-1">Absent</div>
+                    <div class="h3 fw-bold mb-0 text-danger" id="total-absent-count">-</div>
+                </div>
             </div>
         </div>
 
-        <!-- User Analytics Table -->
-        <div class="card shadow-sm border-0 mb-4">
-            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center border-bottom">
-                <h5 class="mb-0 fw-bold"><i class="bi bi-people me-2"></i>User Status</h5>
-                <button class="btn btn-sm btn-light border" onclick="location.reload()"><i class="bi bi-arrow-repeat"></i></button>
+        <!-- Weekly Trends (D3) -->
+        <div class="card">
+            <div class="card-title">
+                <i class="bi bi-graph-up me-2"></i>Weekly Attendance
+            </div>
+            <div id="attendance-d3-chart" class="d3-chart"></div>
+        </div>
+
+        <!-- User Status Table -->
+        <div class="card p-0 overflow-hidden">
+            <div class="p-4 d-flex justify-content-between align-items-center">
+                <div class="fw-bold"><i class="bi bi-people me-2"></i>User Status</div>
+                <button class="btn btn-sm btn-outline" onclick="location.reload()"><i class="bi bi-arrow-repeat"></i></button>
             </div>
             <div class="table-responsive">
                 <table class="table table-hover align-middle mb-0" id="analytics-table">
-                    <thead class="table-light">
+                    <thead>
                         <tr>
-                            <th class="ps-3">ID</th>
+                            <th class="ps-4">ID</th>
                             <th>Name</th>
                             <th>Type</th>
                             <th class="text-center">Present</th>
                             <th class="text-center">Tardy</th>
                             <th class="text-center">Absent</th>
-                            <th class="text-center">Excused</th>
-                            <th class="text-end pe-3">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody class="border-top-0">
-                        <!-- Content populated by JS -->
-                        <tr><td colspan="7" class="text-center py-4 text-muted">Loading data...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Recent Logs Table -->
-        <div class="card shadow-sm border-0">
-            <div class="card-header bg-white py-3 border-bottom">
-                <h5 class="mb-0 fw-bold"><i class="bi bi-clock-history me-2"></i>Recent Activity Logs</h5>
-            </div>
-            <div class="table-responsive">
-                <table class="table table-hover table-sm align-middle mb-0">
-                    <thead class="table-light">
-                        <tr>
-                            <th class="ps-3">Time</th>
-                            <th>User</th>
-                            <th>Status</th>
-                            <th>Notes</th>
-                            <th class="text-end pe-3">Edit</th>
+                            <th class="text-end pe-4">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {% for log in logs %}
-                        <tr>
-                            <td class="ps-3 text-muted small">{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                            <td class="fw-semibold">{{ log.user.name }}</td>
-                            <td>
-                                <span class="badge rounded-pill bg-{{ 'success' if log.status in ['Present', 'On Time'] else 'warning' if log.status in ['Tardy', 'Late'] else 'danger' if log.status == 'Absent' else 'info' if log.status == 'Excused' else 'secondary' }} px-3">
-                                    {{ log.status }}
-                                </span>
-                            </td>
-                            <td class="small text-truncate" style="max-width: 150px;">{{ log.notes if log.notes else '' }}</td>
-                            <td class="text-end pe-3">
-                                <button class="btn btn-sm btn-light border" data-bs-toggle="modal" data-bs-target="#editLogModal{{ log.id }}"><i class="bi bi-pencil-square"></i></button>
-                                
-                                <!-- Edit Log Modal (Inline) -->
-                                <div class="modal fade text-start" id="editLogModal{{ log.id }}" tabindex="-1">
-                                    <div class="modal-dialog">
-                                        <form action="/edit_attendance_log" method="POST">
-                                            <input type="hidden" name="log_id" value="{{ log.id }}">
-                                            <div class="modal-content">
-                                                <div class="modal-header">
-                                                    <h5 class="modal-title">Edit Log #{{ log.id }}</h5>
-                                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                                                </div>
-                                                <div class="modal-body">
-                                                    <div class="mb-3">
-                                                        <label class="form-label">Status</label>
-                                                        <select name="status" class="form-select">
-                                                            <option value="On Time" {{ 'selected' if log.status in ['On Time', 'Present'] }}>On Time</option>
-                                                            <option value="Late" {{ 'selected' if log.status in ['Late', 'Tardy'] }}>Late</option>
-                                                            <option value="Absent" {{ 'selected' if log.status == 'Absent' }}>Absent</option>
-                                                            <option value="Excused" {{ 'selected' if log.status == 'Excused' }}>Excused</option>
-                                                            <option value="Logout" {{ 'selected' if log.status == 'Logout' }}>Logout</option>
-                                                        </select>
-                                                    </div>
-                                                    <div class="mb-3">
-                                                        <label class="form-label">Notes</label>
-                                                        <textarea name="notes" class="form-control" rows="2">{{ log.notes if log.notes else '' }}</textarea>
-                                                    </div>
-                                                </div>
-                                                <div class="modal-footer">
-                                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                                                    <button type="submit" class="btn btn-primary">Save Changes</button>
-                                                </div>
-                                            </div>
-                                        </form>
-                                    </div>
-                                </div>
-                            </td>
-                        </tr>
-                        {% endfor %}
+                        <tr><td colspan="7" class="text-center py-5 text-muted">Loading analytics...</td></tr>
                     </tbody>
                 </table>
             </div>
         </div>
+    </div>
 
+    <!-- Sidebar Section -->
+    <div class="col-lg-4">
+        <!-- New Registration -->
+        <div class="card">
+            <div class="card-title"><i class="bi bi-person-plus me-2"></i>Registration</div>
+            <form action="/add_user" method="POST">
+                <div class="mb-3">
+                    <label class="form-label small fw-bold">User ID (Optional)</label>
+                    <input type="number" name="user_id" class="form-control" placeholder="Auto-assign">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-bold">Full Name</label>
+                    <input type="text" name="name" class="form-control" required placeholder="John Doe">
+                </div>
+                <div class="mb-4">
+                    <label class="form-label small fw-bold">Employment Type</label>
+                    <select name="employment_type" class="form-select">
+                        <option value="Full-time" selected>Full-time</option>
+                        <option value="Part-time">Part-time</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">Register & Capture</button>
+            </form>
+        </div>
+
+        <!-- System Controls -->
+        <div class="card">
+            <div class="card-title"><i class="bi bi-gear me-2"></i>System</div>
+            <div class="d-grid gap-2">
+                <a href="/train" class="btn btn-outline text-start">
+                    <i class="bi bi-arrow-repeat me-2"></i>Retrain Model
+                </a>
+                <a href="/logout" class="btn btn-outline text-start text-danger">
+                    <i class="bi bi-box-arrow-right me-2"></i>Sign Out
+                </a>
+            </div>
+        </div>
+
+        <!-- Recent Logs (Compact) -->
+        <div class="card p-0 overflow-hidden">
+            <div class="p-4 border-bottom">
+                <div class="fw-bold small text-uppercase fw-bold"><i class="bi bi-clock-history me-2"></i>Recent Logs</div>
+            </div>
+            <div class="list-group list-group-flush">
+                {% for log in logs[:10] %}
+                <div class="list-group-item border-0 border-bottom p-3">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="fw-bold small">{{ log.user.name }}</span>
+                        <span class="badge bg-{{ 'success' if log.status in ['Present', 'On Time'] else 'warning' if log.status in ['Tardy', 'Late'] else 'danger' if log.status == 'Absent' else 'light text-dark' }} small">
+                            {{ log.status }}
+                        </span>
+                    </div>
+                    <div class="text-muted smaller" style="font-size: 0.75rem;">{{ log.timestamp.strftime('%I:%M %p') }}</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
     </div>
 </div>
+
+<script>
+    // Fetch and Populate Table
+    fetch('/analytics')
+        .then(response => response.json())
+        .then(data => {
+            const tbody = document.querySelector('#analytics-table tbody');
+            tbody.innerHTML = '';
+            
+            let totalUsers = 0, totalPresent = 0, totalTardy = 0, totalAbsent = 0;
+
+            data.stats.forEach(user => {
+                totalUsers++;
+                totalPresent += user.present;
+                totalTardy += user.tardy;
+                totalAbsent += user.absent;
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="ps-4 text-muted">${user.id}</td>
+                    <td class="fw-bold">${user.name}</td>
+                    <td><span class="text-muted small">${user.employment_type || 'Full-time'}</span></td>
+                    <td class="text-center"><span class="fw-bold">${user.present}</span></td>
+                    <td class="text-center"><span class="text-warning fw-bold">${user.tardy}</span></td>
+                    <td class="text-center"><span class="text-danger fw-bold">${user.absent}</span></td>
+                    <td class="text-end pe-4">
+                        <div class="btn-group btn-group-sm">
+                            <a href="/generate_report_form/${user.id}" class="btn btn-sm btn-outline border-0" title="Report"><i class="bi bi-file-earmark-text"></i></a>
+                            <button class="btn btn-sm btn-outline border-0" onclick="confirmDelete(${user.id}, '${user.name}')" title="Delete"><i class="bi bi-trash"></i></button>
+                        </div>
+                    </td>
+                `;
+                tbody.innerHTML += tr.outerHTML;
+            });
+
+            document.getElementById('total-users-count').textContent = totalUsers;
+            document.getElementById('total-present-count').textContent = totalPresent;
+            document.getElementById('total-tardy-count').textContent = totalTardy;
+            document.getElementById('total-absent-count').textContent = totalAbsent;
+
+            // Render D3 Chart
+            renderD3Chart(data.trends);
+        });
+
+    function renderD3Chart(trends) {
+        const margin = {top: 20, right: 30, bottom: 40, left: 40};
+        const width = document.getElementById('attendance-d3-chart').clientWidth - margin.left - margin.right;
+        const height = 300 - margin.top - margin.bottom;
+
+        const svg = d3.select("#attendance-d3-chart")
+            .append("svg")
+            .attr("width", width + margin.left + margin.right)
+            .attr("height", height + margin.top + margin.bottom)
+            .append("g")
+            .attr("transform", `translate(${margin.left},${margin.top})`);
+
+        // X Axis
+        const x = d3.scaleBand()
+            .range([0, width])
+            .domain(trends.labels)
+            .padding(0.4);
+
+        svg.append("g")
+            .attr("transform", `translate(0,${height})`)
+            .call(d3.axisBottom(x).tickSize(0).tickPadding(10))
+            .call(g => g.select(".domain").remove())
+            .selectAll("text")
+            .attr("class", "axis-label");
+
+        // Y Axis
+        const maxVal = Math.max(...trends.present, ...trends.tardy, ...trends.absent, 5);
+        const y = d3.scaleLinear()
+            .domain([0, maxVal])
+            .range([height, 0]);
+
+        svg.append("g")
+            .call(d3.axisLeft(y).ticks(5).tickSize(-width).tickPadding(10))
+            .call(g => g.select(".domain").remove())
+            .call(g => g.selectAll(".tick line").attr("stroke", "#f0f0f0"))
+            .selectAll("text")
+            .attr("class", "axis-label");
+
+        // Bars
+        svg.selectAll(".bar-present")
+            .data(trends.present)
+            .enter()
+            .append("rect")
+            .attr("class", "bar")
+            .attr("x", (d, i) => x(trends.labels[i]))
+            .attr("y", d => y(d))
+            .attr("width", x.bandwidth())
+            .attr("height", d => height - y(d))
+            .attr("rx", 4);
+    }
+
+    function confirmDelete(id, name) {
+        if (confirm(`Are you sure you want to delete ${name}? This will remove all their logs and face data.`)) {
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = `/delete_user/${id}`;
+            document.body.appendChild(form);
+            form.submit();
+        }
+    }
+</script>
+{% endblock %}
 
 <!-- User Details Modal -->
 <div class="modal fade" id="userDetailsModal" tabindex="-1" aria-hidden="true">
