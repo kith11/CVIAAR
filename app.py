@@ -1267,7 +1267,7 @@ def audit_logs():
         Attendance, AttendanceEdit.attendance_id == Attendance.id
     ).join(
         User, Attendance.user_id == User.id
-    ).order_by(AttendanceEdit.timestamp.desc()).limit(100).all()
+    ).order_by(AttendanceEdit.edited_at.desc()).limit(100).all()
     
     return render_template('audit_logs.html', edits=edits)
 

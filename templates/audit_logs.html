@@ -21,7 +21,7 @@
             <tbody>
                 {% for edit, log, user in edits %}
                 <tr>
-                    <td class="ps-4 text-muted small">{{ edit.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td class="ps-4 text-muted small">{{ edit.edited_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
                     <td><div class="fw-bold">{{ user.name }}</div><div class="smaller text-muted">Record ID: {{ log.id }}</div></td>
                     <td>
                         <span class="badge bg-light text-dark border">{{ edit.previous_status }}</span>
