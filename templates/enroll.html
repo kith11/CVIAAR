@@ -35,17 +35,41 @@
     let isTraining = false;
 
     // Start Camera
-    navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } })
-        .then(stream => {
-            video.srcObject = stream;
-            messageDiv.textContent = "Camera active. Starting capture in 2 seconds...";
-            setTimeout(captureFace, 2000);
-        })
-        .catch(err => {
-            console.error("Camera error:", err);
-            messageDiv.textContent = "Error: Camera access denied or not found. Please allow camera permissions.";
-            messageDiv.className = "mt-2 text-danger";
-        });
+    const isReEnroll = {{ 'true' if re_enroll else 'false' }};
+
+    if (isReEnroll) {
+        messageDiv.textContent = "Re-enrollment started. Resetting existing faces...";
+        fetch(`/api/reset_faces/${userId}`, { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    startCamera();
+                } else {
+                    messageDiv.textContent = "Error resetting faces: " + data.message;
+                    messageDiv.className = "mt-2 text-danger";
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                messageDiv.textContent = "Network Error. Please try again.";
+            });
+    } else {
+        startCamera();
+    }
+
+    function startCamera() {
+        navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } })
+            .then(stream => {
+                video.srcObject = stream;
+                messageDiv.textContent = "Camera active. Starting capture in 2 seconds...";
+                setTimeout(captureFace, 2000);
+            })
+            .catch(err => {
+                console.error("Camera error:", err);
+                messageDiv.textContent = "Error: Camera access denied or not found. Please allow camera permissions.";
+                messageDiv.className = "mt-2 text-danger";
+            });
+    }
 
     function captureFace() {
         if (captured >= 25 || isTraining) return;

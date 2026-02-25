@@ -547,6 +547,28 @@ def enroll_page(user_id):
         return redirect(url_for('admin'))
     return render_template('enroll.html', user=user)
 
+@app.route('/re_enroll', methods=['POST'])
+def re_enroll():
+    user_id = request.form.get('user_id')
+    user = db.session.get(User, user_id)
+    if user:
+        return render_template('enroll.html', user=user, re_enroll=True)
+    flash('Staff ID not found.', 'danger')
+    return redirect(url_for('index'))
+
+@app.route('/api/reset_faces/<int:user_id>', methods=['POST'])
+def api_reset_faces(user_id):
+    if APP_ROLE != "LOCAL_KIOSK":
+        return jsonify({'status': 'error', 'message': 'Reset not available on this service'}), 404
+    user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
+    if os.path.exists(user_dir):
+        for f in os.listdir(user_dir):
+            if f.endswith('.jpg'):
+                os.remove(os.path.join(user_dir, f))
+    else:
+        os.makedirs(user_dir, exist_ok=True)
+    return jsonify({'status': 'success'})
+
 @app.route('/api/capture/<int:user_id>', methods=['GET', 'POST'])
 def api_capture(user_id):
     if APP_ROLE != "LOCAL_KIOSK":

@@ -48,6 +48,15 @@
             </button>
         </div>
 
+        <!-- Retrain Identity -->
+        <div class="card mb-4 text-center">
+            <div class="card-title justify-content-center">Identity Recognition</div>
+            <p class="text-muted small mb-4">Unrecognizable? Retrain your face model here.</p>
+            <button class="btn btn-outline w-100 py-3 fw-bold" data-bs-toggle="modal" data-bs-target="#retrainModal">
+                <i class="bi bi-arrow-repeat me-2"></i>Retrain Identity
+            </button>
+        </div>
+
         <!-- Recent Activity -->
         <div class="card p-0 overflow-hidden">
             <div class="p-4 border-bottom d-flex justify-content-between align-items-center">
@@ -95,6 +104,27 @@
                 <button class="btn btn-primary py-3 fw-bold" onclick="loginSubmit()">CONFIRM IDENTITY</button>
                 <button class="btn btn-outline py-3 small" onclick="logoutSubmit()">SIGN OUT (FINALIZE)</button>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- Retrain Modal -->
+<div class="modal fade" id="retrainModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-sm modal-dialog-centered">
+        <div class="modal-content border-0 p-4">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h5 class="fw-bold mb-0">Retrain Identity</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            
+            <p class="text-muted small mb-4">Enter your Staff ID to reset your face model and start re-capturing.</p>
+            
+            <form action="/re_enroll" method="POST">
+                <div class="mb-4">
+                    <input type="number" name="user_id" class="form-control text-center py-3 fs-4" required placeholder="Staff ID">
+                </div>
+                <button type="submit" class="btn btn-primary w-100 py-3 fw-bold">START RE-CAPTURE</button>
+            </form>
         </div>
     </div>
 </div>
