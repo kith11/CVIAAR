@@ -39,12 +39,12 @@
 
     <!-- Sidebar -->
     <div class="col-lg-4">
-        <!-- Manual Entry -->
+        <!-- Identity Verification Step 2 -->
         <div class="card mb-4 text-center">
-            <div class="card-title justify-content-center">Biometric Bypass</div>
-            <p class="text-muted small mb-4">Manual ID verification if facial recognition is unavailable.</p>
+            <div class="card-title justify-content-center">Finalize Verification</div>
+            <p class="text-muted small mb-4">Enter your Staff ID after face verification to record attendance.</p>
             <button class="btn btn-primary w-100 py-3 fw-bold" data-bs-toggle="modal" data-bs-target="#manualEntryModal">
-                <i class="bi bi-keyboard me-2"></i>Enter ID
+                <i class="bi bi-key me-2"></i>Verify ID
             </button>
         </div>
 
@@ -69,7 +69,7 @@
     <div class="modal-dialog modal-sm modal-dialog-centered">
         <div class="modal-content border-0 p-4">
             <div class="d-flex justify-content-between align-items-center mb-4">
-                <h5 class="fw-bold mb-0">Identity Access</h5>
+                <h5 class="fw-bold mb-0">Identity Confirmation</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             
@@ -92,8 +92,8 @@
             </form>
 
             <div class="d-grid gap-2">
-                <button class="btn btn-primary py-3 fw-bold" onclick="loginSubmit()">CHECK IN</button>
-                <button class="btn btn-outline py-3 small" onclick="logoutSubmit()">CHECK OUT</button>
+                <button class="btn btn-primary py-3 fw-bold" onclick="loginSubmit()">CONFIRM IDENTITY</button>
+                <button class="btn btn-outline py-3 small" onclick="logoutSubmit()">SIGN OUT (FINALIZE)</button>
             </div>
         </div>
     </div>
