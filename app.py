@@ -843,7 +843,12 @@ def edit_attendance_log():
     return redirect(url_for('admin'))
 
 @app.route('/analytics')
+@login_required
 def analytics():
+    # Use AnalyticsEngine for trends
+    engine = AnalyticsEngine(db.session)
+    trends = engine.get_weekly_trends()
+
     # Calculate stats per user
     users = User.query.all()
     stats = []
@@ -858,26 +863,18 @@ def analytics():
         excused = Attendance.query.filter_by(user_id=user.id, status='Excused').count()
         
         # Calculate real absences (days without record)
-        # This is complex to do perfectly without a calendar, 
-        # but let's check the last 3 days
-        
         consecutive_absent = 0
         today = datetime.now().date()
         for i in range(1, 4):
             check_date = today - timedelta(days=i)
-            # Skip if check_date is before user creation
             if check_date < user.created_at.date():
                 continue
 
-            # Check if record exists
             record = Attendance.query.filter_by(user_id=user.id).filter(
                 db.func.date(Attendance.timestamp) == check_date
             ).first()
             
-            if not record:
-                # Check if it was explicitly marked absent
-                consecutive_absent += 1
-            elif record.status == 'Absent':
+            if not record or record.status == 'Absent':
                 consecutive_absent += 1
             else:
                 consecutive_absent = 0
@@ -898,7 +895,7 @@ def analytics():
             'excused': excused
         })
         
-    return jsonify({'stats': stats, 'alerts': alerts})
+    return jsonify({'stats': stats, 'alerts': alerts, 'trends': trends})
 
 @app.route('/api/user_logs/<int:user_id>')
 @login_required
