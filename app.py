@@ -37,6 +37,29 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.secret_key = os.getenv("SECRET_KEY", "default_dev_key")
 app.config["ADMIN_PASSWORD"] = os.getenv("ADMIN_PASSWORD", "admin123")
 
+# Security Settings
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=True,  # Set to False if not using HTTPS
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=timedelta(days=7),
+)
+
+@app.before_request
+def make_session_permanent():
+    session.permanent = True
+
+# Global Error Handler
+@app.errorhandler(Exception)
+def handle_exception(e):
+    # Log the error for the developer
+    app.logger.error(f"Unhandled Exception: {str(e)}", exc_info=True)
+    # Return a generic message to the user
+    return jsonify({
+        "status": "error",
+        "message": "An unexpected error occurred. Please try again later."
+    }), 500
+
 os.makedirs(os.path.join(basedir, "data", "faces"), exist_ok=True)
 os.makedirs(os.path.join(basedir, "data", "offline"), exist_ok=True)
 
@@ -78,6 +101,7 @@ else:
 # Global variables
 attendance_cache = {}
 recognized_faces = {}
+login_attempts = {} # Rate limiting for login
 scan_state = {"status": "no_face", "name": None, "timestamp": 0}
 verified_live_users = {}
 face_verification_cache = {}
@@ -376,13 +400,28 @@ def video_feed():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
+        # Simple Rate Limiting (max 5 attempts per IP per 10 mins)
+        ip = request.remote_addr
+        now = time.time()
+        
+        # Clean up old attempts
+        if ip in login_attempts:
+            login_attempts[ip] = [t for t in login_attempts[ip] if now - t < 600]
+            if len(login_attempts[ip]) >= 5:
+                flash('Too many login attempts. Please wait 10 minutes.', 'danger')
+                return render_template('login.html')
+        else:
+            login_attempts[ip] = []
+
         password = request.form.get('password')
         if password == app.config['ADMIN_PASSWORD']:
+            login_attempts.pop(ip, None) # Clear attempts on success
             session['logged_in'] = True
             flash('Logged in successfully.', 'success')
             next_url = request.args.get('next')
             return redirect(next_url or url_for('admin'))
         else:
+            login_attempts[ip].append(now)
             flash('Invalid password.', 'danger')
     return render_template('login.html')
 
