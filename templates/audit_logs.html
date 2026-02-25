@@ -1,0 +1,41 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="mb-5">
+    <h1 class="section-title">Audit Logs</h1>
+    <p class="section-desc">Track all modifications to attendance records</p>
+</div>
+
+<div class="card p-0 overflow-hidden">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th class="ps-4">Time</th>
+                    <th>Staff</th>
+                    <th>Change</th>
+                    <th>Editor</th>
+                    <th class="pe-4">Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for edit, log, user in edits %}
+                <tr>
+                    <td class="ps-4 text-muted small">{{ edit.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td><div class="fw-bold">{{ user.name }}</div><div class="smaller text-muted">Record ID: {{ log.id }}</div></td>
+                    <td>
+                        <span class="badge bg-light text-dark border">{{ edit.previous_status }}</span>
+                        <i class="bi bi-arrow-right mx-2 text-muted"></i>
+                        <span class="badge bg-primary">{{ edit.new_status }}</span>
+                    </td>
+                    <td><span class="text-muted">{{ edit.edited_by }}</span></td>
+                    <td class="pe-4 small">{{ edit.new_notes }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-center py-5 text-muted">No audit logs found.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

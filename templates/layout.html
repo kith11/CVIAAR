@@ -257,6 +257,14 @@
                 <i class="bi bi-graph-up"></i>
                 Analytics
             </a>
+            <a class="nav-link {{ 'active' if request.path == '/audit_logs' }}" href="/audit_logs">
+                <i class="bi bi-shield-check"></i>
+                Audit Logs
+            </a>
+            <a class="nav-link {{ 'active' if request.path == '/staff_portal' }}" href="/staff_portal">
+                <i class="bi bi-person-badge"></i>
+                Staff Portal
+            </a>
         </nav>
         <div class="mt-auto">
             <a class="nav-link" href="/logout">

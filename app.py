@@ -1233,6 +1233,59 @@ def scheduler_run():
             pass
         time.sleep(30)
 
+import csv
+import io
+from flask import send_file
+
+@app.route('/export_attendance_csv')
+@login_required
+def export_attendance_csv():
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    writer.writerow(['ID', 'Name', 'Timestamp', 'Status', 'Notes'])
+    
+    # Data
+    logs = db.session.query(Attendance, User).join(User, Attendance.user_id == User.id).order_by(Attendance.timestamp.desc()).all()
+    for log, user in logs:
+        writer.writerow([log.id, user.name, log.timestamp.strftime('%Y-%m-%d %H:%M:%S'), log.status, log.notes or ''])
+    
+    output.seek(0)
+    return send_file(
+        io.BytesIO(output.getvalue().encode('utf-8')),
+        mimetype='text/csv',
+        as_attachment=True,
+        download_name=f'attendance_export_{datetime.now().strftime("%Y%m%d")}.csv'
+    )
+
+@app.route('/audit_logs')
+@login_required
+def audit_logs():
+    # Fetch audit logs (edits)
+    edits = db.session.query(AttendanceEdit, Attendance, User).join(
+        Attendance, AttendanceEdit.attendance_id == Attendance.id
+    ).join(
+        User, Attendance.user_id == User.id
+    ).order_by(AttendanceEdit.timestamp.desc()).limit(100).all()
+    
+    return render_template('audit_logs.html', edits=edits)
+
+@app.route('/staff_portal', methods=['GET', 'POST'])
+def staff_portal():
+    user_data = None
+    logs = []
+    if request.method == 'POST':
+        user_id = request.form.get('user_id')
+        user = db.session.get(User, user_id)
+        if user:
+            user_data = user
+            logs = Attendance.query.filter_by(user_id=user.id).order_by(Attendance.timestamp.desc()).limit(20).all()
+        else:
+            flash('Staff ID not found.', 'danger')
+            
+    return render_template('staff_portal.html', user=user_data, logs=logs)
+
 if __name__ == '__main__':
     threading.Thread(target=scheduler_run, daemon=True).start()
     app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
