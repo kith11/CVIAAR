@@ -1147,8 +1147,43 @@ def chat():
     if 'chat_history' not in session:
         session['chat_history'] = []
 
-    # 1. Dynamic Data Injection (Smart Context)
-    injected_context = ""
+    # 1. CSC MC No. 05, s. 2021 Policy Context
+    csc_policy = """
+    STRICT POLICY CONTEXT: CSC Memorandum Circular No. 05, s. 2021 (Amendment to Omnibus Rules on Leave).
+    
+    SCOPE: Applies to NGAs, LGUs, GOCCs with original charters, SUCs, and LUCs.
+    
+    MATERNITY LEAVE:
+    - 105 days full pay for live birth.
+    - 60 days full pay for miscarriage/emergency termination.
+    - Regardless of civil/employment status or length of service.
+    - Solo parents: +15 days.
+    - Extension: Up to 30 days without pay (or use sick/vacation credits). Requires 45-day notice.
+    - Allocation: Up to 7 days to father or alternate caregiver (not for miscarriage).
+    
+    PATERNITY LEAVE:
+    - Married male govt employees cohabiting with legitimate spouse.
+    - 7 working days full pay.
+    - First 4 deliveries only (childbirth or miscarriage).
+    - Must use during spouse's maternity leave.
+    
+    ADOPTION LEAVE:
+    - Female/Single Male: 60 days full pay.
+    - Married Male: 7 days full pay.
+    - Adoptee must be below 7 years old.
+    - Documents: Pre-Adoptive Placement Authority or Decree of Adoption.
+    
+    FORMS: CS Form No. 6 (Revised 2020) for Application, CS Form No. 6a for Allocation. CS Form No. 41 is discontinued.
+    
+    BEHAVIOR RULES:
+    1. Answer ONLY using these rules.
+    2. Do NOT invent policies.
+    3. If a request is outside maternity, paternity, or adoption leave under this MC, respond: "This request is outside the scope of CSC MC No. 05, s. 2021."
+    4. Explain in simple, non-technical language.
+    """
+
+    # 2. Dynamic Data Injection (Smart Context)
+    injected_context = csc_policy + "\n\n"
     try:
         # Simple entity recognition: Check if any User's name is in the message
         # In a production app, we might use a vector DB or smarter extraction, 
