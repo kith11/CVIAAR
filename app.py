@@ -74,6 +74,16 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+# Admin role decorator
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('logged_in') or session.get('role') != 'admin':
+            flash('Access Denied: Admin privileges required.', 'danger')
+            return redirect(url_for('login', next=request.url))
+        return f(*args, **kwargs)
+    return decorated_function
+
 # Kiosk Access decorator
 def kiosk_required(f):
     @wraps(f)
@@ -417,6 +427,7 @@ def login():
         if password == app.config['ADMIN_PASSWORD']:
             login_attempts.pop(ip, None) # Clear attempts on success
             session['logged_in'] = True
+            session['role'] = 'admin'
             flash('Logged in successfully.', 'success')
             next_url = request.args.get('next')
             return redirect(next_url or url_for('admin'))
@@ -463,7 +474,7 @@ def process_absences():
     db.session.commit()
 
 @app.route('/admin')
-@login_required
+@admin_required
 def admin():
     process_absences()
     users = User.query.all()
@@ -477,7 +488,7 @@ def admin():
     return render_template('admin.html', users=users, logs=logs, trends=trends, risks=risks)
 
 @app.route('/add_user', methods=['POST'])
-@login_required
+@admin_required
 def add_user():
     name = request.form.get('name')
     user_id = request.form.get('user_id')
@@ -513,7 +524,7 @@ def add_user():
     return redirect(url_for('enroll_page', user_id=new_user.id))
 
 @app.route('/add_user_by_id', methods=['POST'])
-@login_required
+@admin_required
 def add_user_by_id():
     user_id = request.form.get('user_id')
     if not user_id:
@@ -539,7 +550,7 @@ def add_user_by_id():
     return redirect(url_for('enroll_page', user_id=new_user.id))
 
 @app.route('/enroll/<int:user_id>')
-@login_required
+@admin_required
 def enroll_page(user_id):
     user = db.session.get(User, user_id)
     if not user:
@@ -818,14 +829,14 @@ def capture_training_images(user_id):
     pass
 
 @app.route('/train')
-@login_required
+@admin_required
 def train():
     face_engine.train_model()
     flash('Model retrained successfully!', 'success')
     return redirect(url_for('admin'))
 
 @app.route('/edit_attendance_log', methods=['POST'])
-@login_required
+@admin_required
 def edit_attendance_log():
     log_id = request.form.get('log_id')
     status = request.form.get('status')
@@ -865,7 +876,7 @@ def edit_attendance_log():
     return redirect(url_for('admin'))
 
 @app.route('/analytics')
-@login_required
+@admin_required
 def analytics():
     # Use AnalyticsEngine for trends
     engine = AnalyticsEngine(db.session)
@@ -920,7 +931,7 @@ def analytics():
     return jsonify({'stats': stats, 'alerts': alerts, 'trends': trends})
 
 @app.route('/api/user_logs/<int:user_id>')
-@login_required
+@admin_required
 def get_user_logs(user_id):
     user = db.session.get(User, user_id)
     if not user:
@@ -972,7 +983,7 @@ def auto_logout_missing():
     db.session.commit()
 
 @app.route('/generate_report_form/<int:user_id>')
-@login_required
+@admin_required
 def generate_report_form(user_id):
     user = db.session.get(User, user_id)
     if not user:
@@ -981,7 +992,7 @@ def generate_report_form(user_id):
     return render_template('report_form.html', user=user, current_month=datetime.now().month)
 
 @app.route('/generate_report', methods=['POST'])
-@login_required
+@admin_required
 def generate_report():
     user_id = request.form.get('user_id')
     month = int(request.form.get('month'))
@@ -1061,13 +1072,13 @@ def generate_report():
     return render_template('report.html', user=user, days=days_data, month_name=month_name, year=year)
 
 @app.route('/advanced_analytics')
-@login_required
+@admin_required
 def advanced_analytics():
     users = User.query.order_by(User.name).all()
     return render_template('analytics.html', users=users)
 
 @app.route('/api/advanced_analytics_data')
-@login_required
+@admin_required
 def advanced_analytics_data():
     engine = AnalyticsEngine(db.session)
     
@@ -1260,7 +1271,7 @@ import io
 from flask import send_file
 
 @app.route('/export_attendance_csv')
-@login_required
+@admin_required
 def export_attendance_csv():
     output = io.StringIO()
     writer = csv.writer(output)
@@ -1282,7 +1293,7 @@ def export_attendance_csv():
     )
 
 @app.route('/audit_logs')
-@login_required
+@admin_required
 def audit_logs():
     # Fetch audit logs (edits)
     edits = db.session.query(AttendanceEdit, Attendance, User).join(

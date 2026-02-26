@@ -13,6 +13,7 @@ class User(db.Model):
     schedule_start = db.Column(db.String(5), default="06:00")
     schedule_end = db.Column(db.String(5), default="19:00")
     employment_type = db.Column(db.String(20), default="Full-time")
+    role = db.Column(db.String(20), default="staff")  # roles: staff, admin
     attendances = db.relationship("Attendance", backref="user", lazy=True)
 
 
