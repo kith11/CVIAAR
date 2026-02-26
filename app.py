@@ -1345,15 +1345,30 @@ def staff_portal():
     logs = []
     if request.method == 'POST':
         user_id = request.form.get('user_id')
-        user = db.session.get(User, user_id)
-        if user:
-            user_data = user
-            logs = Attendance.query.filter_by(user_id=user.id).order_by(Attendance.timestamp.desc()).limit(20).all()
-        else:
-            flash('Staff ID not found.', 'danger')
+        try:
+            uid = int(user_id)
+            user = db.session.get(User, uid)
+            if user:
+                user_data = user
+                logs = Attendance.query.filter_by(user_id=user.id).order_by(Attendance.timestamp.desc()).limit(20).all()
+            else:
+                flash('Staff ID not found.', 'danger')
+        except (ValueError, TypeError):
+            flash('Invalid Staff ID format.', 'danger')
             
     return render_template('staff_portal.html', user=user_data, logs=logs)
 
 if __name__ == '__main__':
+    with app.app_context():
+        # Ensure 'role' column exists in 'users' table (Simple migration)
+        from sqlalchemy import text
+        try:
+            db.session.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'staff'"))
+            db.session.commit()
+            print("Database migrated: Added 'role' column to 'users' table.")
+        except Exception:
+            # Column likely already exists
+            db.session.rollback()
+            
     threading.Thread(target=scheduler_run, daemon=True).start()
     app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
