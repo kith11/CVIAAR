@@ -1128,9 +1128,9 @@ def api_scan_status():
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
-    user_message = request.json.get('message', '')
+    user_message = request.json.get('query', '')
     if not user_message:
-        return jsonify({'error': 'No message provided'}), 400
+        return jsonify({'error': 'No query provided'}), 400
 
     # Initialize chat history in session
     if 'chat_history' not in session:
