@@ -14,7 +14,7 @@
     <div id="standby-overlay" class="standby-overlay d-none">
         <div class="standby-bg"></div>
         <div class="standby-inner">
-            <div class="standby-title">Research Team</div>
+            <div class="standby-title">Research Team Credits</div>
             <div id="standby-names" class="standby-names"></div>
         </div>
     </div>
@@ -36,9 +36,19 @@
                 </div>
                 
                 <div id="status-overlay" class="position-absolute bottom-0 start-0 w-100 p-3 p-md-4 bg-dark bg-opacity-50 backdrop-blur" style="backdrop-filter: blur(10px);">
-                    <div class="d-flex align-items-center">
-                        <div class="spinner-grow spinner-grow-sm text-white me-2 me-md-3" role="status"></div>
-                        <h5 class="mb-0 fw-bold text-white" id="status-message" style="font-size: 0.9rem; line-height: 1.2;">Initializing system...</h5>
+                    <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
+                        <div class="d-flex align-items-center">
+                            <div class="spinner-grow spinner-grow-sm text-white me-2 me-md-3" role="status"></div>
+                            <h5 class="mb-0 fw-bold text-white" id="status-message" style="font-size: 0.9rem; line-height: 1.2;">Initializing system...</h5>
+                        </div>
+                        <div id="attendance-actions" class="d-none">
+                            <div class="text-end small text-white-50 mb-1" id="attendance-name"></div>
+                            <div class="btn-group">
+                                <button id="btn-login" type="button" class="btn btn-success btn-sm fw-bold">Log in</button>
+                                <button id="btn-logout" type="button" class="btn btn-outline-light btn-sm fw-bold">Log out</button>
+                            </div>
+                            <div class="small text-warning mt-1 d-none" id="attendance-message"></div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -81,11 +91,11 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             
-            <p class="text-muted small mb-4">Enter your Staff ID to reset your face model and start re-capturing.</p>
+            <p class="text-muted small mb-4">Enter your 6-digit Staff ID to reset your face model and start re-capturing.</p>
             
             <form action="/re_enroll" method="POST">
                 <div class="mb-4">
-                    <input type="number" name="user_id" class="form-control text-center py-3 fs-4" required placeholder="Staff ID">
+                    <input type="text" name="staff_code" class="form-control text-center py-3 fs-4" required placeholder="e.g. 123456" minlength="6" maxlength="6" pattern="\d{6}">
                 </div>
                 <button type="submit" class="btn btn-primary w-100 py-3 fw-bold">START RE-CAPTURE</button>
             </form>
@@ -136,25 +146,18 @@
     .standby-names {
         position: relative;
         width: 100%;
-        height: 55vh;
-        overflow: hidden;
+        margin-top: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.35rem;
     }
 
     .standby-name {
-        position: absolute;
         font-weight: 600;
-        font-size: 1.1rem;
+        font-size: 1.05rem;
         white-space: nowrap;
-        opacity: 0.12;
-        animation: float-name 22s linear infinite;
-    }
-
-    @keyframes float-name {
-        0%   { transform: translate3d(-10%, 110%, 0); opacity: 0; }
-        10%  { opacity: 0.18; }
-        50%  { opacity: 0.28; }
-        90%  { opacity: 0.18; }
-        100% { transform: translate3d(110%, -10%, 0); opacity: 0; }
+        opacity: 0.88;
     }
 
     @media (max-width: 768px) {
@@ -172,8 +175,23 @@
     // Clock Logic
     function updateClock() {
         const now = new Date();
-        document.getElementById('clock-time').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-        document.getElementById('clock-date').textContent = now.toLocaleDateString([], { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+        // Force Asia/Manila (PHT) timezone
+        const timeOptions = { 
+            timeZone: 'Asia/Manila', 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            hour12: true 
+        };
+        const dateOptions = { 
+            timeZone: 'Asia/Manila', 
+            weekday: 'short', 
+            day: '2-digit', 
+            month: 'short', 
+            year: 'numeric' 
+        };
+        
+        document.getElementById('clock-time').textContent = now.toLocaleTimeString('en-US', timeOptions);
+        document.getElementById('clock-date').textContent = now.toLocaleDateString('en-US', dateOptions);
     }
     setInterval(updateClock, 1000);
     updateClock();
@@ -219,6 +237,11 @@
     const captureCtx = captureCanvas.getContext('2d');
     const statusMsg = document.getElementById('status-message');
     const statusOverlay = document.getElementById('status-overlay');
+    const attendanceActions = document.getElementById('attendance-actions');
+    const attendanceName = document.getElementById('attendance-name');
+    const attendanceMessage = document.getElementById('attendance-message');
+    const btnLogin = document.getElementById('btn-login');
+    const btnLogout = document.getElementById('btn-logout');
 
     const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(window.location.hostname);
     let cameraStream = null;
@@ -226,6 +249,8 @@
     let recognizeBusy = false;
     let lastFaces = [];
     let lastFacesTime = 0;
+    let currentVerifiedUserId = null;
+    let currentVerifiedUserName = null;
 
     function stopCamera() {
         if (processIntervalId) {
@@ -323,15 +348,38 @@
                 if (mainFace.verified) {
                     statusMsg.innerHTML = `IDENTITY VERIFIED: ${mainFace.name.toUpperCase()}`;
                     statusOverlay.style.background = "rgba(0,0,0,0.8)";
+                    currentVerifiedUserId = mainFace.user_id || null;
+                    currentVerifiedUserName = mainFace.name || null;
+                    if (currentVerifiedUserId && currentVerifiedUserName && attendanceActions) {
+                        attendanceName.textContent = currentVerifiedUserName;
+                        attendanceActions.classList.remove('d-none');
+                        attendanceMessage.classList.add('d-none');
+                        attendanceMessage.textContent = '';
+                    }
                 } else if (mainFace.status === 'recognized') {
                     statusMsg.innerHTML = `HELLO ${mainFace.name.toUpperCase()} — PLEASE BLINK`;
+                    currentVerifiedUserId = null;
+                    currentVerifiedUserName = null;
+                    if (attendanceActions) {
+                        attendanceActions.classList.add('d-none');
+                    }
                 } else {
                     statusMsg.innerHTML = 'IDENTITY UNKNOWN';
+                    currentVerifiedUserId = null;
+                    currentVerifiedUserName = null;
+                    if (attendanceActions) {
+                        attendanceActions.classList.add('d-none');
+                    }
                 }
             } else {
                 if (lastFaces.length === 0) {
                     statusMsg.innerHTML = 'SCANNING FOR IDENTITY...';
                     statusOverlay.style.background = "rgba(0,0,0,0.5)";
+                    currentVerifiedUserId = null;
+                    currentVerifiedUserName = null;
+                    if (attendanceActions) {
+                        attendanceActions.classList.add('d-none');
+                    }
                 }
             }
             overlayCtx.restore();
@@ -339,21 +387,76 @@
         .finally(() => recognizeBusy = false);
     }
 
+    // --- Attendance action handlers ---
+    function postJson(url, payload) {
+        return fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload || {})
+        }).then(r => r.json());
+    }
+
+    if (btnLogin) {
+        btnLogin.addEventListener('click', () => {
+            if (!currentVerifiedUserId) {
+                attendanceMessage.textContent = 'Face verification required. Please blink again.';
+                attendanceMessage.classList.remove('d-none');
+                return;
+            }
+            attendanceMessage.textContent = 'Recording login...';
+            attendanceMessage.classList.remove('d-none');
+            postJson('/api/attendance/login', { user_id: currentVerifiedUserId })
+                .then(res => {
+                    attendanceMessage.textContent = res.message || 'Login processed.';
+                })
+                .catch(() => {
+                    attendanceMessage.textContent = 'Unable to record login. Please try again.';
+                });
+        });
+    }
+
+    if (btnLogout) {
+        btnLogout.addEventListener('click', () => {
+            if (!currentVerifiedUserId) {
+                attendanceMessage.textContent = 'Face verification required. Please blink again.';
+                attendanceMessage.classList.remove('d-none');
+                return;
+            }
+            attendanceMessage.textContent = 'Recording logout...';
+            attendanceMessage.classList.remove('d-none');
+            postJson('/api/attendance/logout', { user_id: currentVerifiedUserId })
+                .then(res => {
+                    attendanceMessage.textContent = res.message || 'Logout processed.';
+                })
+                .catch(() => {
+                    attendanceMessage.textContent = 'Unable to record logout. Please try again.';
+                });
+        });
+    }
+
     // --- Standby / floating research names ---
-    // TODO: Replace with your real research member names
+    // Research team credits
     const researchMembers = [
-        "Research Member 1",
-        "Research Member 2",
-        "Research Member 3",
-        "Research Member 4",
-        "Research Member 5"
+        "Margarette G. Biro (Leader)",
+        "Irish Jane N. Yungco (Co-Leader)",
+        "Sarah Jean M. Gonzales",
+        "Quirstine Ucel G. Polancos",
+        "Melet L. Avenido",
+        "Rowie Joy Maurillo",
+        "Melvin M. Singson",
+        "Sheena Saraum",
+        "Flora Mae Maratas",
+        "Jason G. Barrientos",
+        "Rian Kent D. Castro",
+        "John Marc Rusia",
+        "John Keith A. Barrientos"
     ];
 
     const standbyOverlay = document.getElementById('standby-overlay');
     const standbyNamesEl = document.getElementById('standby-names');
     let standbyActive = false;
     let lastActivity = Date.now();
-    const STANDBY_AFTER_MS = 60000; // 1 minute of inactivity
+    const STANDBY_AFTER_MS = 15000; // 15 seconds of inactivity
 
     function markActivity() {
         lastActivity = Date.now();
@@ -371,24 +474,10 @@
 
     function createFloatingNames() {
         standbyNamesEl.innerHTML = '';
-        const width = standbyNamesEl.clientWidth || window.innerWidth;
-        const height = standbyNamesEl.clientHeight || window.innerHeight * 0.5;
-
         researchMembers.forEach((name, index) => {
             const span = document.createElement('span');
             span.className = 'standby-name';
             span.textContent = name;
-
-            const startX = Math.random() * 40 - 20;   // -20% to 20%
-            const startY = 100 + Math.random() * 40;  // 100% to 140%
-            const delay = -(index * 3 + Math.random() * 4); // staggered
-            const hue = 200 + Math.random() * 80;
-
-            span.style.left = `${startX}%`;
-            span.style.top = `${startY}%`;
-            span.style.animationDelay = `${delay}s`;
-            span.style.color = `hsla(${hue}, 80%, 75%, 0.9)`;
-
             standbyNamesEl.appendChild(span);
         });
     }

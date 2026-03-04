@@ -11,26 +11,51 @@
                     <input type="hidden" name="user_id" value="{{ user.id }}">
                     
                     <div class="mb-3">
-                        <label class="form-label">Select Month</label>
-                        <select name="month" class="form-select">
-                            {% for m in range(1, 13) %}
-                            <option value="{{ m }}" {% if m == current_month %}selected{% endif %}>{{ m }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-
-                    <div class="mb-3">
-                        <label class="form-label">Select Year</label>
-                        <select name="year" class="form-select">
-                            <option value="2025" selected>2025</option>
-                            <option value="2026">2026</option>
-                        </select>
+                        <label class="form-label">Select Period</label>
+                        <!-- Calendar-style month picker limited to 2025–2026 -->
+                        <input
+                            type="month"
+                            id="report-period"
+                            class="form-control"
+                            min="2025-01"
+                            max="2026-12"
+                            value="2025-{{ '%02d' % current_month }}"
+                            required
+                        >
+                        <!-- Hidden fields used by the existing backend -->
+                        <input type="hidden" name="month" id="report-month">
+                        <input type="hidden" name="year" id="report-year">
                     </div>
 
                     <div class="d-grid">
                         <button type="submit" class="btn btn-success">Generate Printable Report</button>
                     </div>
                 </form>
+                <script>
+                    (function () {
+                        const form = document.querySelector('form[action="/generate_report"]');
+                        const periodInput = document.getElementById('report-period');
+                        const monthInput = document.getElementById('report-month');
+                        const yearInput = document.getElementById('report-year');
+
+                        if (form && periodInput && monthInput && yearInput) {
+                            const syncFields = () => {
+                                const val = periodInput.value; // e.g. "2025-03"
+                                if (!val) return;
+                                const [y, m] = val.split('-');
+                                yearInput.value = y;
+                                monthInput.value = parseInt(m, 10);
+                            };
+
+                            // Initialize on load
+                            syncFields();
+
+                            // Keep in sync on change and before submit
+                            periodInput.addEventListener('change', syncFields);
+                            form.addEventListener('submit', syncFields);
+                        }
+                    })();
+                </script>
             </div>
         </div>
     </div>

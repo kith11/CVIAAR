@@ -84,7 +84,9 @@ class AnalyticsEngine:
 
         # If no date range provided, default to current month for labeling purposes
         if not start_date:
-            now = datetime.now()
+            # Default to Asia/Manila (PHT) for consistency
+            import pytz
+            now = datetime.now(pytz.timezone('Asia/Manila'))
             import calendar
             num_days = calendar.monthrange(now.year, now.month)[1]
         else:

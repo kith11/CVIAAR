@@ -55,7 +55,7 @@
                 <table class="table table-hover align-middle mb-0" id="analytics-table">
                     <thead>
                         <tr>
-                            <th class="ps-4">ID</th>
+                            <th class="ps-4">Staff ID</th>
                             <th>Name</th>
                             <th>Type</th>
                             <th class="text-center">Present</th>
@@ -84,17 +84,17 @@
             </div>
         </div>
 
-        <!-- New Registration -->
+        <!-- Gmail-based Registration -->
         <div class="card">
-            <div class="card-title"><i class="bi bi-person-plus me-2"></i>Registration</div>
+            <div class="card-title"><i class="bi bi-person-plus me-2"></i>Gmail Registration</div>
             <form action="/add_user" method="POST">
-                <div class="mb-3">
-                    <label class="form-label small fw-bold">User ID (Optional)</label>
-                    <input type="number" name="user_id" class="form-control" placeholder="Auto-assign">
-                </div>
                 <div class="mb-3">
                     <label class="form-label small fw-bold">Full Name</label>
                     <input type="text" name="name" class="form-control" required placeholder="John Doe">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-bold">Gmail Address</label>
+                    <input type="email" name="email" class="form-control" required placeholder="name@gmail.com">
                 </div>
                 <div class="mb-4">
                     <label class="form-label small fw-bold">Employment Type</label>
@@ -159,8 +159,9 @@
                 totalAbsent += user.absent;
 
                 const tr = document.createElement('tr');
+                const displayId = user.staff_code || user.id;
                 tr.innerHTML = `
-                    <td class="ps-4 text-muted">${user.id}</td>
+                    <td class="ps-4 text-muted">${displayId}</td>
                     <td class="fw-bold">${user.name}</td>
                     <td><span class="text-muted small">${user.employment_type || 'Full-time'}</span></td>
                     <td class="text-center"><span class="fw-bold">${user.present}</span></td>

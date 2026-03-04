@@ -5,6 +5,8 @@ import time
 import threading
 import base64
 import sqlite3
+import random
+import pytz
 from datetime import datetime, timedelta
 from flask import Flask, render_template, Response, request, redirect, url_for, jsonify, flash, session
 from functools import wraps
@@ -102,6 +104,9 @@ def _ensure_supabase_schema(engine) -> None:
     try:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'staff'"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(120)"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_code VARCHAR(6)"))
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_staff_code ON users(staff_code)"))
     except Exception:
         pass
 
@@ -150,6 +155,8 @@ def _sync_sqlite_to_supabase_once() -> None:
                         User(
                             id=ru.id,
                             name=ru.name,
+                            email=getattr(ru, "email", None),
+                            staff_code=getattr(ru, "staff_code", None),
                             created_at=ru.created_at,
                             schedule_start=ru.schedule_start,
                             schedule_end=ru.schedule_end,
@@ -171,6 +178,8 @@ def _sync_sqlite_to_supabase_once() -> None:
                         User(
                             id=lu.id,
                             name=lu.name,
+                            email=getattr(lu, "email", None),
+                            staff_code=getattr(lu, "staff_code", None),
                             created_at=lu.created_at,
                             schedule_start=lu.schedule_start,
                             schedule_end=lu.schedule_end,
@@ -180,6 +189,10 @@ def _sync_sqlite_to_supabase_once() -> None:
                     )
                 else:
                     existing.name = lu.name
+                    if hasattr(existing, "email"):
+                        existing.email = getattr(lu, "email", None)
+                    if hasattr(existing, "staff_code"):
+                        existing.staff_code = getattr(lu, "staff_code", None)
                     existing.schedule_start = lu.schedule_start
                     existing.schedule_end = lu.schedule_end
                     existing.employment_type = lu.employment_type
@@ -189,7 +202,7 @@ def _sync_sqlite_to_supabase_once() -> None:
             supa.rollback()
 
         # 3) Attendance: push unsynced local logs to Supabase (dedupe by sync_key)
-        now_dt = datetime.now()
+        now_dt = get_now_pht()
         pending = Attendance.query.filter(Attendance.synced_at.is_(None)).order_by(Attendance.timestamp.asc()).limit(300).all()
         if not pending:
             return
@@ -325,12 +338,27 @@ VERIFIED_TTL_SEC = _env_float("VERIFIED_TTL_SEC", 20.0)
 # Per-user blink state (in-memory, kiosk only)
 blink_state = {}  # user_id -> {"closed": bool, "changed_at": float}
 
+PHT = pytz.timezone('Asia/Manila')
+
+def get_now_pht():
+    return datetime.now(PHT)
+
 def get_current_date():
-    return datetime.now().strftime('%Y-%m-%d')
+    return get_now_pht().strftime('%Y-%m-%d')
 
 
 OFFLINE_DB_PATH = os.path.join(basedir, "data", "offline", "attendance_queue.db")
 
+
+def generate_staff_code():
+    """
+    Generate a unique 6-digit staff code (string) for manual identification.
+    """
+    existing_codes = {c for (c,) in db.session.query(User.staff_code).filter(User.staff_code.isnot(None)).all()}
+    while True:
+        code = f"{random.randint(0, 999999):06d}"
+        if code not in existing_codes:
+            return code
 
 def init_offline_db():
     if APP_ROLE != "LOCAL_KIOSK":
@@ -380,7 +408,7 @@ def sync_offline_attendance():
         try:
             ts = datetime.fromisoformat(ts_str)
         except ValueError:
-            ts = datetime.now()
+            ts = get_now_pht()
         rec = Attendance(
             user_id=user_id,
             status=status,
@@ -406,7 +434,7 @@ def mark_attendance(user_id):
     
     with app.app_context():
         existing = Attendance.query.filter_by(user_id=user_id).filter(
-            db.func.date(Attendance.timestamp) == datetime.now().date()
+            db.func.date(Attendance.timestamp) == get_now_pht().date()
         ).first()
         
         if existing:
@@ -417,7 +445,7 @@ def mark_attendance(user_id):
         if not user:
             return False
 
-        now = datetime.now()
+        now = get_now_pht()
         
         sch_start_str = user.schedule_start or "06:00"
         try:
@@ -451,6 +479,91 @@ def mark_attendance(user_id):
         attendance_cache[user_id] = today
         print(f"Marked {status} for user {user_id}")
         return True
+
+
+@app.route('/api/attendance/login', methods=['POST'])
+def api_attendance_login():
+    """
+    Mark today's attendance as login (Present/On Time/Late) for a verified user.
+    Expects JSON: {"user_id": <int>}
+    """
+    if APP_ROLE != "LOCAL_KIOSK":
+        return jsonify({'status': 'error', 'message': 'Login not available on this service'}), 404
+
+    data = request.get_json(silent=True) or {}
+    user_id = data.get('user_id')
+    if not user_id:
+        return jsonify({'status': 'error', 'message': 'Missing user_id'}), 400
+
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Invalid user_id'}), 400
+
+    # Require recent liveness verification
+    now_ts = time.time()
+    last_verified = face_verification_cache.get(uid, 0)
+    if now_ts - last_verified > VERIFIED_TTL_SEC:
+        return jsonify({'status': 'error', 'message': 'Face verification expired. Please blink again.'}), 403
+
+    ok = mark_attendance(uid)
+    if not ok:
+        return jsonify({'status': 'ok', 'message': 'Attendance already recorded for today.'})
+    return jsonify({'status': 'ok', 'message': 'Login recorded.'})
+
+
+@app.route('/api/attendance/logout', methods=['POST'])
+def api_attendance_logout():
+    """
+    Mark today's attendance as Logout for a verified user.
+    Expects JSON: {"user_id": <int>}
+    """
+    if APP_ROLE != "LOCAL_KIOSK":
+        return jsonify({'status': 'error', 'message': 'Logout not available on this service'}), 404
+
+    data = request.get_json(silent=True) or {}
+    user_id = data.get('user_id')
+    if not user_id:
+        return jsonify({'status': 'error', 'message': 'Missing user_id'}), 400
+
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Invalid user_id'}), 400
+
+    now_ts = time.time()
+    last_verified = face_verification_cache.get(uid, 0)
+    if now_ts - last_verified > VERIFIED_TTL_SEC:
+        return jsonify({'status': 'error', 'message': 'Face verification expired. Please blink again.'}), 403
+
+    today = get_current_date()
+    today_start = datetime.strptime(today, "%Y-%m-%d")
+    today_end = today_start + timedelta(days=1)
+
+    existing_logout = Attendance.query.filter(
+        Attendance.user_id == uid,
+        Attendance.timestamp >= today_start,
+        Attendance.timestamp < today_end,
+        Attendance.status == 'Logout'
+    ).first()
+
+    if existing_logout:
+        return jsonify({'status': 'ok', 'message': 'Logout already recorded for today.'})
+
+    rec = Attendance(
+        user_id=uid,
+        status='Logout',
+        timestamp=get_now_pht(),
+        device_id=DEVICE_ID,
+    )
+    db.session.add(rec)
+    try:
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+        enqueue_offline_attendance(uid, get_now_pht(), 'Logout')
+
+    return jsonify({'status': 'ok', 'message': 'Logout recorded.'})
 
 
 @app.before_request
@@ -654,7 +767,7 @@ def process_absences():
     Check attendance for the last 7 days. If a user has no record, mark as Absent.
     Skips weekends (Saturday=5, Sunday=6).
     """
-    today = datetime.now().date()
+    today = get_now_pht().date()
     for i in range(1, 8):
         check_date = today - timedelta(days=i)
         
@@ -697,29 +810,30 @@ def admin():
 @app.route('/add_user', methods=['POST'])
 @admin_required
 def add_user():
-    name = request.form.get('name')
-    user_id = request.form.get('user_id')
+    name = request.form.get('name', '').strip()
+    email = request.form.get('email', '').strip().lower()
     employment_type = request.form.get('employment_type', 'Full-time')
-    
+
     if not name:
         flash('Name is required.', 'danger')
         return redirect(url_for('admin'))
 
-    # If ID is provided, try to use it
-    if user_id:
-        try:
-            uid = int(user_id)
-            existing = db.session.get(User, uid)
-            if existing:
-                flash(f'User ID {uid} already exists.', 'danger')
-                return redirect(url_for('admin'))
-            new_user = User(id=uid, name=name, employment_type=employment_type)
-        except ValueError:
-            flash('Invalid User ID.', 'danger')
-            return redirect(url_for('admin'))
-    else:
-        # Auto-increment
-        new_user = User(name=name, employment_type=employment_type)
+    if not email:
+        flash('Gmail address is required.', 'danger')
+        return redirect(url_for('admin'))
+
+    if not email.endswith('@gmail.com'):
+        flash('Please enter a valid Gmail address (ends with @gmail.com).', 'danger')
+        return redirect(url_for('admin'))
+
+    existing_email = User.query.filter(User.email == email).first()
+    if existing_email:
+        flash('This Gmail address is already registered.', 'danger')
+        return redirect(url_for('admin'))
+
+    # Always auto-assign numeric ID; registration is now Gmail-based.
+    staff_code = generate_staff_code()
+    new_user = User(name=name, email=email, employment_type=employment_type, staff_code=staff_code)
 
     db.session.add(new_user)
     db.session.commit()
@@ -747,8 +861,9 @@ def add_user_by_id():
     if existing:
         flash('User ID already exists', 'danger')
         return redirect(url_for('admin'))
-    # Create user with default name
-    new_user = User(id=uid, name=f'User {uid}')
+    # Create user with default name and auto staff code
+    staff_code = generate_staff_code()
+    new_user = User(id=uid, name=f'User {uid}', staff_code=staff_code)
     db.session.add(new_user)
     db.session.commit()
     # Prepare face directory
@@ -767,8 +882,10 @@ def enroll_page(user_id):
 
 @app.route('/re_enroll', methods=['POST'])
 def re_enroll():
-    user_id = request.form.get('user_id')
-    user = db.session.get(User, user_id)
+    staff_code = (request.form.get('staff_code') or "").strip()
+    user = None
+    if staff_code:
+        user = User.query.filter_by(staff_code=staff_code).first()
     if user:
         return render_template('enroll.html', user=user, re_enroll=True)
     flash('Staff ID not found.', 'danger')
@@ -882,6 +999,7 @@ def api_recognize():
             'name': 'Unknown',
             'status': 'unknown',
             'verified': False,
+            'user_id': None,
         }
 
         if label != -1 and distance < LBPH_DISTANCE_THRESHOLD:
@@ -889,6 +1007,7 @@ def api_recognize():
             if user:
                 result['name'] = user.name
                 result['status'] = 'recognized'
+                result['user_id'] = user.id
                 recognized_faces[user.id] = now_ts
 
                 # Liveness via blink: detect a closed->open transition.
@@ -1055,7 +1174,7 @@ def analytics():
         
         # Calculate real absences (days without record)
         consecutive_absent = 0
-        today = datetime.now().date()
+        today = get_now_pht().date()
         for i in range(1, 4):
             check_date = today - timedelta(days=i)
             if check_date < user.created_at.date():
@@ -1076,6 +1195,7 @@ def analytics():
 
         stats.append({
             'id': user.id,
+            'staff_code': user.staff_code,
             'name': user.name,
             'employment_type': user.employment_type,
             'schedule_start': user.schedule_start or '06:00',
@@ -1122,6 +1242,24 @@ with app.app_context():
         db.session.rollback()
 
     try:
+        db.session.execute(text("ALTER TABLE users ADD COLUMN email VARCHAR(120)"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    try:
+        db.session.execute(text("ALTER TABLE users ADD COLUMN staff_code VARCHAR(6)"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    try:
+        db.session.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_staff_code ON users(staff_code)"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    try:
         db.session.execute(text("ALTER TABLE attendance_logs ADD COLUMN sync_key VARCHAR(36)"))
         db.session.commit()
     except Exception:
@@ -1154,6 +1292,19 @@ with app.app_context():
     init_offline_db()
     _start_sync_worker()
 
+    # Ensure every user has a staff_code for manual identification
+    try:
+        existing_codes = {u.staff_code for u in User.query.with_entities(User.staff_code).all() if u.staff_code}
+        for user in User.query.filter((User.staff_code.is_(None)) | (User.staff_code == "")).all():
+            code = f"{random.randint(0, 999999):06d}"
+            while code in existing_codes:
+                code = f"{random.randint(0, 999999):06d}"
+            user.staff_code = code
+            existing_codes.add(code)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
 
 def auto_logout_missing():
     today = get_current_date()
@@ -1185,7 +1336,7 @@ def generate_report_form(user_id):
     if not user:
         flash('User not found', 'danger')
         return redirect(url_for('admin'))
-    return render_template('report_form.html', user=user, current_month=datetime.now().month)
+    return render_template('report_form.html', user=user, current_month=get_now_pht().month)
 
 @app.route('/generate_report', methods=['POST'])
 @admin_required
@@ -1343,38 +1494,8 @@ def chat():
     if 'chat_history' not in session:
         session['chat_history'] = []
 
-    # 1. CSC MC No. 05, s. 2021 Policy Context
-    csc_policy = """
-    STRICT POLICY CONTEXT: CSC Memorandum Circular No. 05, s. 2021 (Amendment to Omnibus Rules on Leave).
-    
-    SCOPE: Applies to NGAs, LGUs, GOCCs with original charters, SUCs, and LUCs.
-    
-    MATERNITY LEAVE:
-    - 105 days full pay for live birth.
-    - 60 days full pay for miscarriage/emergency termination.
-    - Regardless of civil/employment status or length of service.
-    - Solo parents: +15 days.
-    - Extension: Up to 30 days without pay (or use sick/vacation credits). Requires 45-day notice.
-    - Allocation: Up to 7 days to father or alternate caregiver (not for miscarriage).
-    
-    PATERNITY LEAVE:
-    - Married male govt employees cohabiting with legitimate spouse.
-    - 7 working days full pay.
-    - First 4 deliveries only (childbirth or miscarriage).
-    - Must use during spouse's maternity leave.
-    
-    ADOPTION LEAVE:
-    - Female/Single Male: 60 days full pay.
-    - Married Male: 7 days full pay.
-    - Adoptee must be below 7 years old.
-    - Documents: Pre-Adoptive Placement Authority or Decree of Adoption.
-    
-    FORMS: CS Form No. 6 (Revised 2020) for Application, CS Form No. 6a for Allocation. CS Form No. 41 is discontinued.
-    
-    """
-
     # 2. Dynamic Data Injection (Smart Context)
-    injected_context = csc_policy + "\n\n"
+    injected_context = ""
     try:
         # Simple entity recognition: Check if any User's name is in the message
         # In a production app, we might use a vector DB or smarter extraction, 
@@ -1482,8 +1603,9 @@ def scheduler_run():
                 print(f"Garbage collection: {n} objects collected")
                 gc_counter = 0
 
-            now = datetime.now()
+            now = get_now_pht()
             auto_time = datetime.strptime(f"{get_current_date()} {AUTO_LOGOUT_TIME}", "%Y-%m-%d %H:%M")
+            auto_time = PHT.localize(auto_time)
             if last_auto_logout_date != get_current_date() and now >= auto_time:
                 with app.app_context():
                     auto_logout_missing()
@@ -1515,7 +1637,7 @@ def export_attendance_csv():
         io.BytesIO(output.getvalue().encode('utf-8')),
         mimetype='text/csv',
         as_attachment=True,
-        download_name=f'attendance_export_{datetime.now().strftime("%Y%m%d")}.csv'
+        download_name=f'attendance_export_{get_now_pht().strftime("%Y%m%d")}.csv'
     )
 
 @app.route('/audit_logs')
@@ -1535,10 +1657,11 @@ def staff_portal():
     user_data = None
     logs = []
     if request.method == 'POST':
-        user_id = request.form.get('user_id')
+        staff_code = (request.form.get('staff_code') or "").strip()
         try:
-            uid = int(user_id)
-            user = db.session.get(User, uid)
+            if not staff_code:
+                raise ValueError("missing staff code")
+            user = User.query.filter_by(staff_code=staff_code).first()
             if user:
                 user_data = user
                 logs = Attendance.query.filter_by(user_id=user.id).order_by(Attendance.timestamp.desc()).limit(20).all()
