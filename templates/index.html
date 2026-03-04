@@ -47,15 +47,6 @@
 
     <!-- Sidebar -->
     <div class="col-lg-4">
-        <!-- Identity Verification Step 2 -->
-        <div class="card mb-4 text-center">
-            <div class="card-title justify-content-center">Finalize Verification</div>
-            <p class="text-muted small mb-4">Enter your Staff ID after face verification to record attendance.</p>
-            <button class="btn btn-primary w-100 py-3 fw-bold" data-bs-toggle="modal" data-bs-target="#manualEntryModal">
-                <i class="bi bi-key me-2"></i>Verify ID
-            </button>
-        </div>
-
         <!-- Retrain Identity -->
         <div class="card mb-4 text-center">
             <div class="card-title justify-content-center">Identity Recognition</div>
@@ -76,41 +67,6 @@
                     <div class="spinner-border spinner-border-sm mb-2"></div>
                     <div class="small">Syncing logs...</div>
                 </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Manual Entry Modal - Professional Overhaul -->
-<div class="modal fade" id="manualEntryModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-sm modal-dialog-centered">
-        <div class="modal-content border-0 p-4">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h5 class="fw-bold mb-0">Identity Confirmation</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            
-            <div id="login-readout" class="h1 fw-bold text-center mb-4 py-3 border-bottom" style="letter-spacing: 0.2em; min-height: 70px; color: var(--accent);"></div>
-            
-            <div class="d-grid gap-2 mb-4" style="grid-template-columns: repeat(3, 1fr); display: grid;">
-                {% for i in range(1, 10) %}
-                <button class="btn btn-outline py-3 fs-5" onclick="loginAppend('{{ i }}')">{{ i }}</button>
-                {% endfor %}
-                <button class="btn btn-outline py-3 text-danger small" onclick="loginClear()">CLR</button>
-                <button class="btn btn-outline py-3 fs-5" onclick="loginAppend('0')">0</button>
-                <button class="btn btn-outline py-3" onclick="loginBack()"><i class="bi bi-backspace"></i></button>
-            </div>
-
-            <form id="login-form" action="/manual_attendance" method="POST" style="display:none;">
-                <input type="hidden" name="user_id" id="login-user-id">
-            </form>
-            <form id="logout-form" action="/manual_logout" method="POST" style="display:none;">
-                <input type="hidden" name="user_id" id="logout-user-id">
-            </form>
-
-            <div class="d-grid gap-2">
-                <button class="btn btn-primary py-3 fw-bold" onclick="loginSubmit()">CONFIRM IDENTITY</button>
-                <button class="btn btn-outline py-3 small" onclick="logoutSubmit()">SIGN OUT (FINALIZE)</button>
             </div>
         </div>
     </div>
@@ -222,32 +178,6 @@
     setInterval(updateClock, 1000);
     updateClock();
 
-    // Keypad Logic
-    function loginReadout() { return document.getElementById('login-readout'); }
-    function loginAppend(d) {
-        const ro = loginReadout();
-        const val = ro.textContent.trim();
-        if (val.length < 12) ro.textContent = (val + d);
-    }
-    function loginBack() {
-        const ro = loginReadout();
-        const val = ro.textContent.trim();
-        ro.textContent = val.slice(0, -1);
-    }
-    function loginClear() { loginReadout().textContent = ''; }
-    function loginSubmit() {
-        const val = loginReadout().textContent.trim();
-        if (!val) return;
-        document.getElementById('login-user-id').value = val;
-        document.getElementById('login-form').submit();
-    }
-    function logoutSubmit() {
-        const val = loginReadout().textContent.trim();
-        if (!val) return;
-        document.getElementById('logout-user-id').value = val;
-        document.getElementById('logout-form').submit();
-    }
-
     // Recent Logs Polling
     function fetchRecentLogs() {
         fetch('/api/recent_logs')
@@ -291,25 +221,55 @@
     const statusOverlay = document.getElementById('status-overlay');
 
     const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(window.location.hostname);
-
-    if (isLocal && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: { ideal: 15, max: 15 } } })
-            .then(stream => {
-                video.srcObject = stream;
-                statusMsg.textContent = "Scanning for identity...";
-                setInterval(processFrame, 400); 
-            })
-            .catch(err => {
-                statusMsg.textContent = "Camera access denied";
-                statusOverlay.classList.add('bg-danger');
-            });
-    } else {
-        statusMsg.textContent = "System in remote standby";
-    }
-
+    let cameraStream = null;
+    let processIntervalId = null;
     let recognizeBusy = false;
     let lastFaces = [];
     let lastFacesTime = 0;
+
+    function stopCamera() {
+        if (processIntervalId) {
+            clearInterval(processIntervalId);
+            processIntervalId = null;
+        }
+        if (cameraStream) {
+            cameraStream.getTracks().forEach(t => t.stop());
+            cameraStream = null;
+        }
+        if (video) {
+            video.srcObject = null;
+        }
+        statusMsg.textContent = "Standby mode";
+        statusOverlay.style.background = "rgba(0,0,0,0.8)";
+    }
+
+    function startCamera() {
+        if (!isLocal || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            statusMsg.textContent = "System in remote standby";
+            return;
+        }
+        if (cameraStream) {
+            return; // already running
+        }
+        navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: { ideal: 15, max: 15 } } })
+            .then(stream => {
+                cameraStream = stream;
+                video.srcObject = stream;
+                statusMsg.textContent = "Scanning for identity...";
+                statusOverlay.style.background = "rgba(0,0,0,0.5)";
+                processIntervalId = setInterval(processFrame, 400);
+            })
+            .catch(err => {
+                console.error("Camera error:", err);
+                const name = (err && err.name) ? err.name : 'Error';
+                const msg = (err && err.message) ? err.message : '';
+                statusMsg.textContent = `Camera error: ${name}${msg ? ' — ' + msg : ''}`;
+                statusOverlay.classList.add('bg-danger');
+            });
+    }
+
+    // Start camera immediately on load (for local kiosk)
+    startCamera();
 
     function processFrame() {
         if (recognizeBusy || video.readyState !== video.HAVE_ENOUGH_DATA) return;
@@ -400,6 +360,8 @@
         if (standbyActive) {
             standbyActive = false;
             standbyOverlay.classList.add('d-none');
+            // Resume camera when leaving standby
+            startCamera();
         }
     }
 
@@ -437,6 +399,8 @@
             standbyActive = true;
             createFloatingNames();
             standbyOverlay.classList.remove('d-none');
+            // Disable camera while in standby
+            stopCamera();
         }
         requestAnimationFrame(standbyLoop);
     }

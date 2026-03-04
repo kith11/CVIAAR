@@ -1,36 +1,42 @@
+import os
+from typing import Sequence
+
 import cv2
 import mediapipe as mp
-import os
 import numpy as np
 from PIL import Image
 
+
 class FaceEngine:
-    def __init__(self, model_path='data/lbph_model.yml', faces_dir='data/faces'):
+    def __init__(self, model_path: str = "data/lbph_model.yml", faces_dir: str = "data/faces"):
         self.model_path = model_path
         self.faces_dir = faces_dir
-        
-        # Initialize MediaPipe Face Mesh (for liveness)
+
+        # MediaPipe Face Mesh (landmarks + liveness)
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
             max_num_faces=1,
             refine_landmarks=True,
             min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
+            min_tracking_confidence=0.5,
         )
-        
-        # Initialize LBPH Recognizer
+
+        # LBPH Recognizer
         try:
-            # Revert to default parameters for general stability
             self.recognizer = cv2.face.LBPHFaceRecognizer_create()
         except AttributeError:
-            raise ImportError("opencv-contrib-python is required for LBPHFaceRecognizer. Please install it.")
-        
-        # Load model if exists
+            raise ImportError(
+                "opencv-contrib-python is required for LBPHFaceRecognizer. Please install it."
+            )
+
+        self.model_loaded = False
         if os.path.exists(self.model_path):
             self.recognizer.read(self.model_path)
             self.model_loaded = True
-        else:
-            self.model_loaded = False
+
+        # Tunables
+        self.face_scale_factor = 0.5  # downscale for mesh processing
+        self.face_padding_ratio = 0.20
 
     def preprocess_face(self, face_img):
         """
@@ -51,46 +57,65 @@ class FaceEngine:
         bbox: (x, y, w, h)
         landmarks: list of (x, y) normalized coordinates
         """
-        # Resize frame for faster processing
+        if frame is None:
+            return []
+
         h, w, _ = frame.shape
-        scale_factor = 0.5  # Process at half resolution (320x240 for 640x480)
-        small_frame = cv2.resize(frame, (0, 0), fx=scale_factor, fy=scale_factor)
-        
+        sf = float(self.face_scale_factor)
+        if sf <= 0 or sf > 1:
+            sf = 1.0
+
+        # Process a downscaled frame for speed, but correctly re-project coords.
+        if sf != 1.0:
+            small_frame = cv2.resize(frame, (0, 0), fx=sf, fy=sf)
+        else:
+            small_frame = frame
+
+        sh, sw, _ = small_frame.shape
         frame_rgb = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
         results = self.face_mesh.process(frame_rgb)
-        
+
         faces_data = []
-        if results.multi_face_landmarks:
-            for landmarks in results.multi_face_landmarks:
-                # Calculate bounding box from landmarks
-                x_min, y_min = w, h
-                x_max, y_max = 0, 0
-                
-                # Convert landmarks to list and scale back up
-                landmark_points = []
-                for lm in landmarks.landmark:
-                    # Use original w, h for coordinates
-                    x, y = int(lm.x * w), int(lm.y * h)
-                    landmark_points.append((x, y))
-                    if x < x_min: x_min = x
-                    if x > x_max: x_max = x
-                    if y < y_min: y_min = y
-                    if y > y_max: y_max = y
-                
-                # Add padding
-                pad_w = int((x_max - x_min) * 0.2)
-                pad_h = int((y_max - y_min) * 0.2)
-                
-                x_min = max(0, x_min - pad_w)
-                y_min = max(0, y_min - pad_h)
-                x_max = min(w, x_max + pad_w)
-                y_max = min(h, y_max + pad_h)
-                
-                bw = x_max - x_min
-                bh = y_max - y_min
-                
-                faces_data.append(((x_min, y_min, bw, bh), landmarks.landmark))
-                
+        if not results.multi_face_landmarks:
+            return faces_data
+
+        for lmset in results.multi_face_landmarks:
+            # Compute bbox in small-frame pixel space then scale to original.
+            x_min_s, y_min_s = sw, sh
+            x_max_s, y_max_s = 0, 0
+
+            for lm in lmset.landmark:
+                x_s = int(lm.x * sw)
+                y_s = int(lm.y * sh)
+                x_min_s = min(x_min_s, x_s)
+                y_min_s = min(y_min_s, y_s)
+                x_max_s = max(x_max_s, x_s)
+                y_max_s = max(y_max_s, y_s)
+
+            # Scale bbox back up to original frame size
+            if sf != 1.0:
+                x_min = int(x_min_s / sf)
+                y_min = int(y_min_s / sf)
+                x_max = int(x_max_s / sf)
+                y_max = int(y_max_s / sf)
+            else:
+                x_min, y_min, x_max, y_max = x_min_s, y_min_s, x_max_s, y_max_s
+
+            # Pad bbox
+            pad_w = int((x_max - x_min) * float(self.face_padding_ratio))
+            pad_h = int((y_max - y_min) * float(self.face_padding_ratio))
+            x_min = max(0, x_min - pad_w)
+            y_min = max(0, y_min - pad_h)
+            x_max = min(w, x_max + pad_w)
+            y_max = min(h, y_max + pad_h)
+
+            bw = max(0, x_max - x_min)
+            bh = max(0, y_max - y_min)
+            if bw == 0 or bh == 0:
+                continue
+
+            faces_data.append(((x_min, y_min, bw, bh), lmset.landmark))
+
         return faces_data
 
     def calculate_ear(self, landmarks, indices, w, h):

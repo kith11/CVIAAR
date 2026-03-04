@@ -8,7 +8,9 @@ import sqlite3
 from datetime import datetime, timedelta
 from flask import Flask, render_template, Response, request, redirect, url_for, jsonify, flash, session
 from functools import wraps
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
 from modules.models import db, User, Attendance, AttendanceEdit, ExcuseNote
 from modules.camera import Camera
 from modules.face_engine import FaceEngine
@@ -29,10 +31,35 @@ else:
 APP_ROLE = os.getenv("APP_ROLE", "LOCAL_KIOSK")
 DEVICE_ID = os.getenv("DEVICE_ID", "local-device")
 
-supabase_db_url = os.getenv("SUPABASE_DB_URL")
-if not supabase_db_url:
-    raise RuntimeError("SUPABASE_DB_URL environment variable is required but not set.")
-app.config["SQLALCHEMY_DATABASE_URI"] = supabase_db_url
+def _db_url_reachable(url: str) -> bool:
+    try:
+        if url.startswith("postgres"):
+            engine = create_engine(
+                url,
+                pool_pre_ping=True,
+                connect_args={"connect_timeout": 3},
+            )
+        else:
+            engine = create_engine(url, pool_pre_ping=True)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        engine.dispose()
+        return True
+    except Exception:
+        return False
+
+
+# Offline-first DB selection:
+# - Always use local SQLite for the app (offline-first)
+# - Separately sync to Supabase when reachable
+supabase_db_url = os.getenv("SUPABASE_DB_URL", "").strip()
+local_sqlite_path = os.getenv(
+    "SQLITE_DB_PATH",
+    os.path.join(basedir, "data", "offline", "cviaar_local.sqlite3"),
+)
+local_sqlite_url = f"sqlite:///{local_sqlite_path}"
+
+app.config["SQLALCHEMY_DATABASE_URI"] = local_sqlite_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.secret_key = os.getenv("SECRET_KEY", "default_dev_key")
 app.config["ADMIN_PASSWORD"] = os.getenv("ADMIN_PASSWORD", "admin123")
@@ -62,8 +89,170 @@ def handle_exception(e):
 
 os.makedirs(os.path.join(basedir, "data", "faces"), exist_ok=True)
 os.makedirs(os.path.join(basedir, "data", "offline"), exist_ok=True)
+os.makedirs(os.path.dirname(local_sqlite_path), exist_ok=True)
 
 db.init_app(app)
+
+
+def _ensure_supabase_schema(engine) -> None:
+    """
+    Best-effort: ensure Supabase has the columns needed for sync.
+    If we don't have perms, it will fail silently and sync will still try inserts.
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'staff'"))
+    except Exception:
+        pass
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS sync_key VARCHAR(36)"))
+            conn.execute(text("ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS synced_at TIMESTAMP NULL"))
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_attendance_logs_sync_key ON attendance_logs(sync_key)"))
+    except Exception:
+        pass
+
+
+def _sync_sqlite_to_supabase_once() -> None:
+    """
+    Offline-first sync:
+    - Uses local SQLite as source-of-truth for this device.
+    - Pushes unsynced attendance to Supabase (deduped by sync_key).
+    - Upserts users (by id) both directions (best effort).
+    """
+    if not supabase_db_url:
+        return
+    if not _db_url_reachable(supabase_db_url):
+        return
+
+    try:
+        supa_engine = create_engine(
+            supabase_db_url,
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": 5},
+        )
+    except Exception:
+        return
+
+    _ensure_supabase_schema(supa_engine)
+    SupaSession = sessionmaker(bind=supa_engine)
+    supa = SupaSession()
+
+    try:
+        # 1) Users: pull missing users from Supabase into SQLite
+        try:
+            remote_users = supa.query(User).all()
+            local_user_ids = {u.id for u in User.query.with_entities(User.id).all()}
+            for ru in remote_users:
+                if ru.id not in local_user_ids:
+                    db.session.add(
+                        User(
+                            id=ru.id,
+                            name=ru.name,
+                            created_at=ru.created_at,
+                            schedule_start=ru.schedule_start,
+                            schedule_end=ru.schedule_end,
+                            employment_type=ru.employment_type,
+                            role=getattr(ru, "role", "staff") or "staff",
+                        )
+                    )
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+        # 2) Users: push local users to Supabase (upsert by PK)
+        try:
+            local_users = User.query.all()
+            for lu in local_users:
+                existing = supa.get(User, lu.id)
+                if existing is None:
+                    supa.add(
+                        User(
+                            id=lu.id,
+                            name=lu.name,
+                            created_at=lu.created_at,
+                            schedule_start=lu.schedule_start,
+                            schedule_end=lu.schedule_end,
+                            employment_type=lu.employment_type,
+                            role=lu.role,
+                        )
+                    )
+                else:
+                    existing.name = lu.name
+                    existing.schedule_start = lu.schedule_start
+                    existing.schedule_end = lu.schedule_end
+                    existing.employment_type = lu.employment_type
+                    existing.role = lu.role
+            supa.commit()
+        except Exception:
+            supa.rollback()
+
+        # 3) Attendance: push unsynced local logs to Supabase (dedupe by sync_key)
+        now_dt = datetime.now()
+        pending = Attendance.query.filter(Attendance.synced_at.is_(None)).order_by(Attendance.timestamp.asc()).limit(300).all()
+        if not pending:
+            return
+
+        pushed_sync_keys = []
+        for rec in pending:
+            if not rec.sync_key:
+                continue
+            exists = supa.query(Attendance.id).filter(Attendance.sync_key == rec.sync_key).first()
+            if exists:
+                pushed_sync_keys.append(rec.sync_key)
+                continue
+            supa.add(
+                Attendance(
+                    user_id=rec.user_id,
+                    timestamp=rec.timestamp,
+                    status=rec.status,
+                    notes=rec.notes,
+                    device_id=rec.device_id,
+                    sync_key=rec.sync_key,
+                    synced_at=now_dt,
+                )
+            )
+            pushed_sync_keys.append(rec.sync_key)
+
+        supa.commit()
+
+        try:
+            for sk in pushed_sync_keys:
+                Attendance.query.filter_by(sync_key=sk).update({"synced_at": now_dt})
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+    finally:
+        try:
+            supa.close()
+        except Exception:
+            pass
+        try:
+            supa_engine.dispose()
+        except Exception:
+            pass
+
+
+def _start_sync_worker() -> None:
+    if APP_ROLE != "LOCAL_KIOSK":
+        return
+    interval = _env_float("SYNC_INTERVAL_SEC", 30.0)
+    if interval < 5:
+        interval = 5
+
+    def loop():
+        while True:
+            try:
+                with app.app_context():
+                    _sync_sqlite_to_supabase_once()
+            except Exception:
+                # keep the kiosk running even if sync fails
+                pass
+            time.sleep(interval)
+
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
 
 # Login decorator
 def login_required(f):
@@ -117,6 +306,24 @@ verified_live_users = {}
 face_verification_cache = {}
 first_blink_times = {}
 AUTO_LOGOUT_TIME = "19:30"
+
+# Face recognition tunables
+def _env_float(key: str, default: float) -> float:
+    raw = os.getenv(key)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+LBPH_DISTANCE_THRESHOLD = _env_float("LBPH_DISTANCE_THRESHOLD", 80.0)
+BLINK_EAR_THRESHOLD = _env_float("BLINK_EAR_THRESHOLD", 0.20)
+BLINK_MAX_CLOSED_SEC = _env_float("BLINK_MAX_CLOSED_SEC", 2.5)
+VERIFIED_TTL_SEC = _env_float("VERIFIED_TTL_SEC", 20.0)
+
+# Per-user blink state (in-memory, kiosk only)
+blink_state = {}  # user_id -> {"closed": bool, "changed_at": float}
 
 def get_current_date():
     return datetime.now().strftime('%Y-%m-%d')
@@ -661,43 +868,52 @@ def api_recognize():
 
     # Detect faces and mesh
     faces_data = face_engine.detect_faces_mesh(frame)
-    
+
+    now_ts = time.time()
     results = []
-    
+
     for ((x, y, w, h), landmarks) in faces_data:
         face_img = frame[y:y+h, x:x+w]
         gray_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-        label, confidence = face_engine.recognize_face(gray_face)
-        
+        label, distance = face_engine.recognize_face(gray_face)
+
         result = {
             'rect': [int(x), int(y), int(w), int(h)],
             'name': 'Unknown',
             'status': 'unknown',
-            'verified': False
+            'verified': False,
         }
-        
-        if label != -1 and confidence < 80:
-             user = db.session.get(User, label)
-             if user:
-                 result['name'] = user.name
-                 result['status'] = 'recognized'
-                 recognized_faces[user.id] = time.time()
-                 
-                 ear = face_engine.check_liveness(landmarks, frame.shape[1], frame.shape[0])
-                 now_ts = time.time()
-                 if ear < 0.20:
-                     first_time = first_blink_times.get(user.id)
-                     if not first_time:
-                         first_blink_times[user.id] = now_ts
-                         result['liveness_detected'] = True
-                     else:
-                         if now_ts - first_time >= 10.0:
-                             verified_live_users[user.id] = now_ts
-                             face_verification_cache[user.id] = now_ts
-                             first_blink_times.pop(user.id, None)
-                             result['liveness_detected'] = True
-                             result['verified'] = True
-                 
+
+        if label != -1 and distance < LBPH_DISTANCE_THRESHOLD:
+            user = db.session.get(User, label)
+            if user:
+                result['name'] = user.name
+                result['status'] = 'recognized'
+                recognized_faces[user.id] = now_ts
+
+                # Liveness via blink: detect a closed->open transition.
+                ear = face_engine.check_liveness(landmarks, frame.shape[1], frame.shape[0])
+                state = blink_state.get(user.id, {"closed": False, "changed_at": now_ts})
+
+                if ear < BLINK_EAR_THRESHOLD:
+                    if not state["closed"]:
+                        state = {"closed": True, "changed_at": now_ts}
+                else:
+                    if state["closed"]:
+                        closed_for = now_ts - state["changed_at"]
+                        if 0.05 <= closed_for <= BLINK_MAX_CLOSED_SEC:
+                            # Blink detected
+                            verified_live_users[user.id] = now_ts
+                            face_verification_cache[user.id] = now_ts
+                            result["liveness_detected"] = True
+                        state = {"closed": False, "changed_at": now_ts}
+
+                blink_state[user.id] = state
+
+                last_verified = face_verification_cache.get(user.id, 0)
+                if now_ts - last_verified <= VERIFIED_TTL_SEC:
+                    result["verified"] = True
+
         results.append(result)
 
     return jsonify({'status': 'success', 'faces': results})
@@ -754,76 +970,18 @@ def edit_user(user_id):
 
 @app.route('/manual_attendance', methods=['POST'])
 def manual_attendance():
-    user_id = request.form.get('user_id')
-    try:
-        user_id = int(user_id)
-        user = db.session.get(User, user_id)
-        if user:
-            last_seen = recognized_faces.get(user.id, 0)
-            if time.time() - last_seen > 5.0:
-                flash("User face not detected. Please stand in front of camera.", "warning")
-                return redirect(url_for('index'))
-
-            last_verified = face_verification_cache.get(user.id, 0)
-            if time.time() - last_verified > 20.0:
-                flash("Face Verification Required. Please stand in front of the camera and blink.", "warning")
-                return redirect(url_for('index'))
-
-            marked = mark_attendance(user.id)
-            if marked:
-                flash(f'Attendance confirmed for {user.name}', 'success')
-            else:
-                flash(f'Attendance ALREADY marked for {user.name} today.', 'warning')
-        else:
-            flash('User ID not found.', 'danger')
-    except ValueError:
-        flash('Invalid ID format.', 'danger')
+    # Manual ID keypad flow is disabled for this deployment.
+    flash('Manual ID verification has been disabled on this device.', 'warning')
     return redirect(url_for('index'))
+
 
 @app.route('/manual_logout', methods=['POST'])
 def manual_logout():
-    user_id = request.form.get('user_id')
-    try:
-        user_id = int(user_id)
-        user = db.session.get(User, user_id)
-        if user:
-            last_seen = recognized_faces.get(user.id, 0)
-            if time.time() - last_seen > 5.0:
-                flash("User face not detected. Please stand in front of camera.", "warning")
-                return redirect(url_for('index'))
-
-            last_verified = face_verification_cache.get(user.id, 0)
-            if time.time() - last_verified > 20.0:
-                flash("Face Verification Required.", "warning")
-                return redirect(url_for('index'))
-
-            today = get_current_date()
-            today_start = datetime.strptime(today, "%Y-%m-%d")
-            today_end = today_start + timedelta(days=1)
-            existing = Attendance.query.filter(
-                Attendance.user_id == user.id,
-                Attendance.timestamp >= today_start,
-                Attendance.timestamp < today_end,
-                Attendance.status == 'Logout'
-            ).first()
-            now = datetime.now()
-            if existing:
-                flash('Already logged out today.', 'warning')
-            else:
-                rec = Attendance(user_id=user.id, status='Logout', timestamp=now, device_id=DEVICE_ID)
-                db.session.add(rec)
-                try:
-                    db.session.commit()
-                except SQLAlchemyError:
-                    db.session.rollback()
-                    enqueue_offline_attendance(user.id, now, 'Logout')
-                else:
-                    flash('Logout recorded.', 'success')
-        else:
-            flash('User ID not found.', 'danger')
-    except ValueError:
-        flash('Invalid ID format.', 'danger')
+    # Manual logout via keypad is disabled; use kiosk face flow instead.
+    flash('Manual logout via ID pad has been disabled on this device.', 'warning')
     return redirect(url_for('index'))
+
+
 def capture_training_images(user_id):
     # Deprecated in favor of client-side enrollment
     pass
@@ -956,14 +1114,45 @@ last_auto_logout_date = None
 
 with app.app_context():
     db.create_all()
-    # Ensure 'role' column exists in 'users' table (Simple migration)
-    from sqlalchemy import text
+    # Simple migrations for SQLite-first mode
     try:
         db.session.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'staff'"))
         db.session.commit()
     except Exception:
         db.session.rollback()
+
+    try:
+        db.session.execute(text("ALTER TABLE attendance_logs ADD COLUMN sync_key VARCHAR(36)"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    try:
+        db.session.execute(text("ALTER TABLE attendance_logs ADD COLUMN synced_at DATETIME"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    # Ensure sync_key exists + unique where possible
+    try:
+        db.session.execute(
+            text(
+                "UPDATE attendance_logs SET sync_key = lower(hex(randomblob(16))) "
+                "WHERE sync_key IS NULL OR sync_key = ''"
+            )
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    try:
+        db.session.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_attendance_logs_sync_key ON attendance_logs(sync_key)"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
     init_offline_db()
+    _start_sync_worker()
 
 
 def auto_logout_missing():
@@ -1182,11 +1371,6 @@ def chat():
     
     FORMS: CS Form No. 6 (Revised 2020) for Application, CS Form No. 6a for Allocation. CS Form No. 41 is discontinued.
     
-    BEHAVIOR RULES:
-    1. Answer ONLY using these rules.
-    2. Do NOT invent policies.
-    3. If a request is outside maternity, paternity, or adoption leave under this MC, respond: "This request is outside the scope of CSC MC No. 05, s. 2021."
-    4. Explain in simple, non-technical language.
     """
 
     # 2. Dynamic Data Injection (Smart Context)

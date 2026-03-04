@@ -1,5 +1,6 @@
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
+import uuid
 
 db = SQLAlchemy()
 
@@ -21,11 +22,13 @@ class Attendance(db.Model):
     __tablename__ = "attendance_logs"
 
     id = db.Column(db.Integer, primary_key=True)
+    sync_key = db.Column(db.String(36), unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.now)
     status = db.Column(db.String(20), nullable=False)
     notes = db.Column(db.String(200), nullable=True)
     device_id = db.Column(db.String(50), nullable=True)
+    synced_at = db.Column(db.DateTime, nullable=True)
 
 
 class AttendanceEdit(db.Model):
