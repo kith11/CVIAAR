@@ -10,6 +10,14 @@
         <div class="h2 fw-bold mb-0" id="clock-time">--:--</div>
         <div class="small text-muted text-uppercase fw-bold" id="clock-date">-- -- ----</div>
     </div>
+    <!-- Standby Overlay -->
+    <div id="standby-overlay" class="standby-overlay d-none">
+        <div class="standby-bg"></div>
+        <div class="standby-inner">
+            <div class="standby-title">Research Team</div>
+            <div id="standby-names" class="standby-names"></div>
+        </div>
+    </div>
 </div>
 
 <div class="row g-4 g-lg-5">
@@ -133,6 +141,75 @@
     .animate-pulse { animation: pulse 2s infinite; }
     @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
     .backdrop-blur { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+
+    /* Standby overlay with floating names */
+    .standby-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 2000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: auto;
+    }
+
+    .standby-bg {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at top, #111 0%, #000 50%, #111 100%);
+        opacity: 0.95;
+    }
+
+    .standby-inner {
+        position: relative;
+        max-width: 900px;
+        width: 100%;
+        padding: 3rem 1.5rem;
+        text-align: center;
+        color: #f7f7f7;
+    }
+
+    .standby-title {
+        font-size: 2rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        margin-bottom: 2rem;
+        opacity: 0.8;
+    }
+
+    .standby-names {
+        position: relative;
+        width: 100%;
+        height: 55vh;
+        overflow: hidden;
+    }
+
+    .standby-name {
+        position: absolute;
+        font-weight: 600;
+        font-size: 1.1rem;
+        white-space: nowrap;
+        opacity: 0.12;
+        animation: float-name 22s linear infinite;
+    }
+
+    @keyframes float-name {
+        0%   { transform: translate3d(-10%, 110%, 0); opacity: 0; }
+        10%  { opacity: 0.18; }
+        50%  { opacity: 0.28; }
+        90%  { opacity: 0.18; }
+        100% { transform: translate3d(110%, -10%, 0); opacity: 0; }
+    }
+
+    @media (max-width: 768px) {
+        .standby-title {
+            font-size: 1.4rem;
+            letter-spacing: 0.12em;
+        }
+        .standby-name {
+            font-size: 0.95rem;
+        }
+    }
 </style>
 
 <script>
@@ -301,5 +378,70 @@
         })
         .finally(() => recognizeBusy = false);
     }
+
+    // --- Standby / floating research names ---
+    // TODO: Replace with your real research member names
+    const researchMembers = [
+        "Research Member 1",
+        "Research Member 2",
+        "Research Member 3",
+        "Research Member 4",
+        "Research Member 5"
+    ];
+
+    const standbyOverlay = document.getElementById('standby-overlay');
+    const standbyNamesEl = document.getElementById('standby-names');
+    let standbyActive = false;
+    let lastActivity = Date.now();
+    const STANDBY_AFTER_MS = 60000; // 1 minute of inactivity
+
+    function markActivity() {
+        lastActivity = Date.now();
+        if (standbyActive) {
+            standbyActive = false;
+            standbyOverlay.classList.add('d-none');
+        }
+    }
+
+    ['mousemove', 'keydown', 'click', 'touchstart'].forEach(evt => {
+        window.addEventListener(evt, markActivity, { passive: true });
+    });
+
+    function createFloatingNames() {
+        standbyNamesEl.innerHTML = '';
+        const width = standbyNamesEl.clientWidth || window.innerWidth;
+        const height = standbyNamesEl.clientHeight || window.innerHeight * 0.5;
+
+        researchMembers.forEach((name, index) => {
+            const span = document.createElement('span');
+            span.className = 'standby-name';
+            span.textContent = name;
+
+            const startX = Math.random() * 40 - 20;   // -20% to 20%
+            const startY = 100 + Math.random() * 40;  // 100% to 140%
+            const delay = -(index * 3 + Math.random() * 4); // staggered
+            const hue = 200 + Math.random() * 80;
+
+            span.style.left = `${startX}%`;
+            span.style.top = `${startY}%`;
+            span.style.animationDelay = `${delay}s`;
+            span.style.color = `hsla(${hue}, 80%, 75%, 0.9)`;
+
+            standbyNamesEl.appendChild(span);
+        });
+    }
+
+    function standbyLoop() {
+        const now = Date.now();
+        if (!standbyActive && now - lastActivity > STANDBY_AFTER_MS) {
+            standbyActive = true;
+            createFloatingNames();
+            standbyOverlay.classList.remove('d-none');
+        }
+        requestAnimationFrame(standbyLoop);
+    }
+
+    standbyOverlay.addEventListener('click', markActivity);
+    standbyLoop();
 </script>
 {% endblock %}
