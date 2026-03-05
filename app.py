@@ -89,6 +89,10 @@ app.config.update(
 def make_session_permanent():
     session.permanent = True
 
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
+
 # Global Error Handler
 @app.errorhandler(Exception)
 def handle_exception(e):
@@ -118,17 +122,18 @@ def _ensure_supabase_schema(engine) -> None:
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'staff'"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(120)"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_code VARCHAR(6)"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_report_sent TIMESTAMP NULL"))
             conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_staff_code ON users(staff_code)"))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"SYNC SCHEMA ERROR (Users): {e}")
 
     try:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS sync_key VARCHAR(36)"))
             conn.execute(text("ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS synced_at TIMESTAMP NULL"))
             conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_attendance_logs_sync_key ON attendance_logs(sync_key)"))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"SYNC SCHEMA ERROR (Logs): {e}")
 
 
 def _sync_sqlite_to_supabase_once() -> None:
@@ -197,6 +202,7 @@ def _sync_sqlite_to_supabase_once() -> None:
                             schedule_end=lu.schedule_end,
                             employment_type=lu.employment_type,
                             role=lu.role,
+                            last_report_sent=lu.last_report_sent,
                         )
                     )
                 else:
@@ -205,12 +211,15 @@ def _sync_sqlite_to_supabase_once() -> None:
                         existing.email = getattr(lu, "email", None)
                     if hasattr(existing, "staff_code"):
                         existing.staff_code = getattr(lu, "staff_code", None)
+                    if hasattr(existing, "last_report_sent"):
+                        existing.last_report_sent = lu.last_report_sent
                     existing.schedule_start = lu.schedule_start
                     existing.schedule_end = lu.schedule_end
                     existing.employment_type = lu.employment_type
                     existing.role = lu.role
             supa.commit()
-        except Exception:
+        except Exception as e:
+            print(f"SYNC USER PUSH ERROR: {e}")
             supa.rollback()
 
         # 3) Attendance: push unsynced local logs to Supabase (dedupe by sync_key)
@@ -246,8 +255,12 @@ def _sync_sqlite_to_supabase_once() -> None:
             for sk in pushed_sync_keys:
                 Attendance.query.filter_by(sync_key=sk).update({"synced_at": now_dt})
             db.session.commit()
-        except Exception:
+        except Exception as e:
+            print(f"LOCAL DB SYNC STATUS UPDATE ERROR: {e}")
             db.session.rollback()
+    except Exception as e:
+        print(f"SUPABASE SYNC CRITICAL ERROR: {e}")
+        supa.rollback()
     finally:
         try:
             supa.close()
@@ -1708,15 +1721,20 @@ def send_analytical_email(user, logs, is_early=False):
         
         msg.attach(MIMEText(html, 'html'))
 
-        server = smtplib.SMTP(app.config["MAIL_SERVER"], app.config["MAIL_PORT"])
+        print(f"DEBUG: Attempting to connect to {app.config['MAIL_SERVER']}:{app.config['MAIL_PORT']}...")
+        server = smtplib.SMTP(app.config["MAIL_SERVER"], app.config["MAIL_PORT"], timeout=10)
         if app.config["MAIL_USE_TLS"]:
+            print("DEBUG: Using TLS...")
             server.starttls()
+        print(f"DEBUG: Attempting login for {app.config['MAIL_USERNAME']}...")
         server.login(app.config["MAIL_USERNAME"], app.config["MAIL_PASSWORD"])
+        print("DEBUG: Sending message...")
         server.send_message(msg)
         server.quit()
+        print("DEBUG: Email sent successfully!")
         return True
     except Exception as e:
-        print(f"Failed to send email: {e}")
+        print(f"CRITICAL EMAIL ERROR: {str(e)}")
         return False
 
 def check_and_send_monthly_reports():
