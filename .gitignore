@@ -1,7 +1,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
-# .env
+.env
 venv/
 .venv/
 data/attendance.db
@@ -11,3 +11,7 @@ data/faces/
 dist/
 build/
 *.spec
+*.ctl
+gunicorn.ctl
+data/
+!data/.gitkeep

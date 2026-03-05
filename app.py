@@ -75,7 +75,8 @@ app.config["MAIL_PORT"] = int(os.getenv("MAIL_PORT", 587))
 app.config["MAIL_USE_TLS"] = os.getenv("MAIL_USE_TLS", "True") == "True"
 app.config["MAIL_USERNAME"] = os.getenv("MAIL_USERNAME")
 app.config["MAIL_PASSWORD"] = os.getenv("MAIL_PASSWORD")
-app.config["MAIL_DEFAULT_SENDER"] = os.getenv("MAIL_DEFAULT_SENDER", app.config["MAIL_USERNAME"])
+# Set a fallback for MAIL_DEFAULT_SENDER if not provided in .env
+app.config["MAIL_DEFAULT_SENDER"] = os.getenv("MAIL_DEFAULT_SENDER") or os.getenv("MAIL_USERNAME")
 
 # Security Settings
 app.config.update(
@@ -1638,15 +1639,18 @@ def send_analytical_email(user, logs, is_early=False):
     """Sends a beautifully formatted HTML analytical report to the user's Gmail."""
     if not user.email:
         print(f"No email for user {user.name}")
-        return False
+        return False, "User has no email address."
 
     try:
         msg = MIMEMultipart()
-        msg['From'] = app.config["MAIL_DEFAULT_SENDER"]
+        # Ensure sender is correctly set
+        sender = app.config.get("MAIL_DEFAULT_SENDER") or app.config.get("MAIL_USERNAME")
+        msg['From'] = sender
         msg['To'] = user.email
-        msg['Subject'] = f"Attendance Analytical Report - {user.name}"
         if is_early:
             msg['Subject'] = f"Early Record Request - {user.name}"
+        else:
+            msg['Subject'] = f"Attendance Analytical Report - {user.name}"
 
         # Calculate basic stats
         total = len(logs)
@@ -1658,63 +1662,101 @@ def send_analytical_email(user, logs, is_early=False):
 
         html = f"""
         <html>
-        <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; line-height: 1.6;">
-            <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-                <h2 style="color: #2c3e50; text-align: center; border-bottom: 2px solid #3498db; padding-bottom: 10px;">
-                    { 'Early Attendance Record' if is_early else '30-Day Attendance Analysis' }
-                </h2>
-                
-                <p>Hello <strong>{user.name}</strong>,</p>
-                <p>Here is your attendance summary as of {get_now_pht().strftime('%B %d, %Y')}:</p>
-                
-                <div style="display: flex; justify-content: space-around; background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
-                    <div style="text-align: center;">
-                        <div style="font-size: 0.8rem; color: #7f8c8d; text-transform: uppercase;">Presence</div>
-                        <div style="font-size: 1.2rem; font-weight: bold; color: #27ae60;">{present}</div>
-                    </div>
-                    <div style="text-align: center;">
-                        <div style="font-size: 0.8rem; color: #7f8c8d; text-transform: uppercase;">Late</div>
-                        <div style="font-size: 1.2rem; font-weight: bold; color: #f39c12;">{late}</div>
-                    </div>
-                    <div style="text-align: center;">
-                        <div style="font-size: 0.8rem; color: #7f8c8d; text-transform: uppercase;">Absent</div>
-                        <div style="font-size: 1.2rem; font-weight: bold; color: #e74c3c;">{absent}</div>
-                    </div>
-                </div>
+        <body style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f4f7f9; margin: 0; padding: 0; -webkit-font-smoothing: antialiased;">
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f7f9; padding: 40px 20px;">
+                <tr>
+                    <td align="center">
+                        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                            <!-- Header -->
+                            <tr>
+                                <td align="center" style="background-color: #2563eb; padding: 40px 20px;">
+                                    <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.025em;">
+                                        { 'Early Attendance Record' if is_early else '30-Day Attendance Analysis' }
+                                    </h1>
+                                    <p style="color: #bfdbfe; margin-top: 8px; font-size: 14px; margin-bottom: 0;">CVIAAR Intelligence System</p>
+                                </td>
+                            </tr>
+                            
+                            <!-- Content -->
+                            <tr>
+                                <td style="padding: 40px 32px;">
+                                    <p style="margin: 0; font-size: 16px; color: #1f2937;">Hello <strong style="color: #111827;">{user.name}</strong>,</p>
+                                    <p style="margin-top: 12px; font-size: 15px; color: #4b5563; line-height: 1.5;">Here is your personal attendance summary generated on {get_now_pht().strftime('%B %d, %Y')}.</p>
+                                    
+                                    <!-- Stats Cards -->
+                                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 32px;">
+                                        <tr>
+                                            <td width="31%" style="background-color: #f0fdf4; border-radius: 12px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 12px; font-weight: 600; color: #166534; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Presence</div>
+                                                <div style="font-size: 24px; font-weight: 700; color: #15803d;">{present}</div>
+                                            </td>
+                                            <td width="3%"></td>
+                                            <td width="31%" style="background-color: #fffbeb; border-radius: 12px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 12px; font-weight: 600; color: #92400e; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Late</div>
+                                                <div style="font-size: 24px; font-weight: 700; color: #b45309;">{late}</div>
+                                            </td>
+                                            <td width="3%"></td>
+                                            <td width="31%" style="background-color: #fef2f2; border-radius: 12px; padding: 16px; text-align: center;">
+                                                <div style="font-size: 12px; font-weight: 600; color: #991b1b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Absent</div>
+                                                <div style="font-size: 24px; font-weight: 700; color: #b91c1c;">{absent}</div>
+                                            </td>
+                                        </tr>
+                                    </table>
 
-                <div style="background: #eef2f7; padding: 10px; border-radius: 5px; text-align: center; margin-bottom: 20px;">
-                    <strong>Attendance Rate:</strong> {rate:.1f}%
-                </div>
+                                    <!-- Progress Bar Section -->
+                                    <div style="margin-top: 32px; padding: 24px; background-color: #f8fafc; border-radius: 12px; border: 1px solid #e2e8f0;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                            <span style="font-size: 14px; font-weight: 600; color: #64748b;">Overall Attendance Rate</span>
+                                            <span style="font-size: 16px; font-weight: 700; color: #2563eb;">{rate:.1f}%</span>
+                                        </div>
+                                        <div style="width: 100%; background-color: #e2e8f0; height: 8px; border-radius: 4px; overflow: hidden;">
+                                            <div style="width: {rate}%; background-color: #2563eb; height: 100%; border-radius: 4px;"></div>
+                                        </div>
+                                    </div>
 
-                <h3 style="color: #2c3e50; border-left: 4px solid #3498db; padding-left: 10px;">Recent Logs</h3>
-                <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
-                    <thead>
-                        <tr style="background: #3498db; color: white;">
-                            <th style="padding: 10px; text-align: left;">Date & Time</th>
-                            <th style="padding: 10px; text-align: left;">Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
+                                    <!-- Table Section -->
+                                    <h3 style="margin-top: 40px; margin-bottom: 16px; font-size: 16px; font-weight: 700; color: #111827; border-left: 4px solid #2563eb; padding-left: 12px;">Recent Activity Logs</h3>
+                                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: separate; border-spacing: 0;">
+                                        <thead>
+                                            <tr>
+                                                <th style="padding: 12px 16px; background-color: #f1f5f9; text-align: left; font-size: 13px; font-weight: 600; color: #64748b; border-bottom: 1px solid #e2e8f0; border-top-left-radius: 8px;">Date & Time</th>
+                                                <th style="padding: 12px 16px; background-color: #f1f5f9; text-align: right; font-size: 13px; font-weight: 600; color: #64748b; border-bottom: 1px solid #e2e8f0; border-top-right-radius: 8px;">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
         """
         
-        for log in logs[:10]: # Show last 10 logs
-            color = "#27ae60" if log.status in ['Present', 'On Time'] else "#f39c12" if log.status in ['Late', 'Tardy'] else "#e74c3c"
+        for i, log in enumerate(logs[:10]):
+            color = "#16a34a" if log.status in ['Present', 'On Time'] else "#d97706" if log.status in ['Late', 'Tardy'] else "#dc2626"
+            bg = "#ffffff" if i % 2 == 0 else "#f8fafc"
             html += f"""
-                        <tr style="border-bottom: 1px solid #eee;">
-                            <td style="padding: 10px;">{log.timestamp.strftime('%Y-%m-%d %I:%M %p')}</td>
-                            <td style="padding: 10px; color: {color}; font-weight: bold;">{log.status}</td>
-                        </tr>
+                                            <tr style="background-color: {bg};">
+                                                <td style="padding: 14px 16px; font-size: 14px; color: #334155; border-bottom: 1px solid #f1f5f9;">{log.timestamp.strftime('%Y-%m-%d %I:%M %p')}</td>
+                                                <td style="padding: 14px 16px; text-align: right; font-size: 14px; font-weight: 600; color: {color}; border-bottom: 1px solid #f1f5f9;">{log.status}</td>
+                                            </tr>
             """
 
         html += """
-                    </tbody>
-                </table>
-                
-                <p style="font-size: 0.8rem; color: #95a5a6; margin-top: 30px; text-align: center; border-top: 1px solid #eee; padding-top: 10px;">
-                    This is an automated report from the CVIAAR Attendance System.<br>
-                    Please do not reply to this email.
-                </p>
-            </div>
+                                        </tbody>
+                                    </table>
+                                    
+                                    <p style="margin-top: 40px; font-size: 13px; color: #94a3b8; text-align: center; line-height: 1.6;">
+                                        This is an automated analytical report from the <strong>CVIAAR Attendance System</strong>.<br>
+                                        To maintain security, please do not share this email.
+                                    </p>
+                                </td>
+                            </tr>
+                            
+                            <!-- Footer -->
+                            <tr>
+                                <td align="center" style="background-color: #f8fafc; padding: 24px; border-top: 1px solid #f1f5f9;">
+                                    <p style="margin: 0; font-size: 12px; color: #64748b;">&copy; 2026 CVIAAR Intelligence. All rights reserved.</p>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
         </body>
         </html>
         """
@@ -1732,10 +1774,10 @@ def send_analytical_email(user, logs, is_early=False):
         server.send_message(msg)
         server.quit()
         print("DEBUG: Email sent successfully!")
-        return True
+        return True, "Email sent successfully!"
     except Exception as e:
         print(f"CRITICAL EMAIL ERROR: {str(e)}")
-        return False
+        return False, str(e)
 
 def check_and_send_monthly_reports():
     """Checks all users and sends reports if 30 days have passed since the last one."""
@@ -1839,10 +1881,11 @@ def request_early_report():
     # Fetch logs (last 30 days or all recent)
     logs = Attendance.query.filter_by(user_id=user.id).order_by(Attendance.timestamp.desc()).limit(100).all()
     
-    if send_analytical_email(user, logs, is_early=True):
+    success, message = send_analytical_email(user, logs, is_early=True)
+    if success:
         flash(f'Early analytical report has been sent to {user.email}!', 'success')
     else:
-        flash('Failed to send email. Please try again later.', 'danger')
+        flash(f'Failed to send email: {message}', 'danger')
         
     return redirect(url_for('staff_portal'))
 
