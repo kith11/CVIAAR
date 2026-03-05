@@ -1057,17 +1057,17 @@ def api_attendance_record():
 
         now = get_now_pht()
         
-        # Check for existing records for the same action today
-        existing_today = Attendance.query.filter(
-            Attendance.user_id == uid,
-            db.func.date(Attendance.timestamp) == now.date(),
-            Attendance.status.ilike(action) # Case-insensitive check for 'login' or 'logout'
-        ).first()
-
-        if existing_today:
-            return jsonify({'status': 'error', 'message': f'You have already recorded a {action} for today.'}), 409
-
         if action.lower() == 'login':
+            # Check if a login record already exists for today
+            existing_login = Attendance.query.filter(
+                Attendance.user_id == uid,
+                db.func.date(Attendance.timestamp) == now.date(),
+                Attendance.status.in_(['On Time', 'Late'])
+            ).first()
+
+            if existing_login:
+                return jsonify({'status': 'error', 'message': 'You have already logged in for today.'}), 409
+
             sch_start_str = user.schedule_start or "06:00"
             try:
                 sch_start_dt = now.replace(hour=int(sch_start_str[:2]), minute=int(sch_start_str[3:]), second=0, microsecond=0)
@@ -1081,11 +1081,21 @@ def api_attendance_record():
             else:
                 status = 'Late'
             
-            message = f"LOGIN ENDPOINT HIT"
+            message = f"Login successful for {user.name}."
 
         elif action.lower() == 'logout':
+            # Check if a logout record already exists for today
+            existing_logout = Attendance.query.filter(
+                Attendance.user_id == uid,
+                db.func.date(Attendance.timestamp) == now.date(),
+                Attendance.status == 'Logout'
+            ).first()
+
+            if existing_logout:
+                return jsonify({'status': 'error', 'message': 'You have already logged out for today.'}), 409
+
             status = 'Logout'
-            message = f"LOGOUT ENDPOINT HIT"
+            message = f"Logout successful for {user.name}."
         
         else:
             return jsonify({'status': 'error', 'message': 'Invalid action specified'}), 400
