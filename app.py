@@ -57,7 +57,7 @@ def _db_url_reachable(url: str) -> bool:
 # Offline-first DB selection:
 # - Always use local SQLite for the app (offline-first)
 # - Separately sync to Supabase when reachable
-supabase_db_url = os.getenv("SUPABASE_DB_URL", "").strip()
+supabase_db_url = (os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL", "")).strip()
 local_sqlite_path = os.getenv(
     "SQLITE_DB_PATH",
     os.path.join(basedir, "data", "offline", "cviaar_local.sqlite3"),
@@ -94,6 +94,7 @@ def make_session_permanent():
 def handle_exception(e):
     # Log the error for the developer
     app.logger.error(f"Unhandled Exception: {str(e)}", exc_info=True)
+    print(f"CRITICAL APP ERROR: {str(e)}")
     # Return a generic message to the user
     return jsonify({
         "status": "error",
@@ -1265,6 +1266,18 @@ with app.app_context():
         db.session.rollback()
 
     try:
+        # SQLite uses DATETIME, PostgreSQL uses TIMESTAMP
+        db.session.execute(text("ALTER TABLE users ADD COLUMN last_report_sent TIMESTAMP"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        try:
+            db.session.execute(text("ALTER TABLE users ADD COLUMN last_report_sent DATETIME"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    try:
         db.session.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_staff_code ON users(staff_code)"))
         db.session.commit()
     except Exception:
@@ -1277,10 +1290,16 @@ with app.app_context():
         db.session.rollback()
 
     try:
-        db.session.execute(text("ALTER TABLE attendance_logs ADD COLUMN synced_at DATETIME"))
+        # SQLite uses DATETIME, PostgreSQL uses TIMESTAMP
+        db.session.execute(text("ALTER TABLE attendance_logs ADD COLUMN synced_at TIMESTAMP"))
         db.session.commit()
     except Exception:
         db.session.rollback()
+        try:
+            db.session.execute(text("ALTER TABLE attendance_logs ADD COLUMN synced_at DATETIME"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
 
     # Ensure sync_key exists + unique where possible
     try:
