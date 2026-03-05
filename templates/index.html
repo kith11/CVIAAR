@@ -389,6 +389,7 @@
 
     // --- Attendance action handlers ---
     function postJson(url, payload) {
+        console.log(`Posting to ${url} with payload:`, payload);
         return fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -405,7 +406,7 @@
             }
             attendanceMessage.textContent = 'Recording login...';
             attendanceMessage.classList.remove('d-none');
-            postJson('/api/attendance/login', { user_id: currentVerifiedUserId })
+            postJson('/api/attendance/record', { user_id: currentVerifiedUserId, action: 'login' })
                 .then(res => {
                     attendanceMessage.textContent = res.message || 'Login processed.';
                 })
@@ -424,7 +425,7 @@
             }
             attendanceMessage.textContent = 'Recording logout...';
             attendanceMessage.classList.remove('d-none');
-            postJson('/api/attendance/logout', { user_id: currentVerifiedUserId })
+            postJson('/api/attendance/record', { user_id: currentVerifiedUserId, action: 'logout' })
                 .then(res => {
                     attendanceMessage.textContent = res.message || 'Logout processed.';
                 })

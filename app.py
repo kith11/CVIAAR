@@ -8,6 +8,7 @@ import sqlite3
 import random
 import pytz
 import smtplib
+import traceback
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
@@ -452,7 +453,7 @@ def sync_offline_attendance():
         conn.commit()
     conn.close()
 
-def mark_attendance(user_id):
+def mark_attendance(user_id, status=None):
     today = get_current_date()
     
     if user_id in attendance_cache and attendance_cache[user_id] == today:
@@ -473,22 +474,23 @@ def mark_attendance(user_id):
 
         now = get_now_pht()
         
-        sch_start_str = user.schedule_start or "06:00"
-        try:
-            sch_start_dt = datetime.strptime(f"{today} {sch_start_str}", "%Y-%m-%d %H:%M")
-        except ValueError:
-            sch_start_dt = datetime.strptime(f"{today} 06:00", "%Y-%m-%d %H:%M")
-        
-        on_time_end = sch_start_dt + timedelta(hours=1, minutes=15)
-        
-        window_start = sch_start_dt - timedelta(hours=1)
-        
-        if window_start <= now <= on_time_end:
-            status = 'On Time'
-        elif now > on_time_end:
-            status = 'Late'
-        else:
-            status = 'On Time'
+        if not status:
+            sch_start_str = user.schedule_start or "06:00"
+            try:
+                sch_start_dt = datetime.strptime(f"{today} {sch_start_str}", "%Y-%m-%d %H:%M")
+            except ValueError:
+                sch_start_dt = datetime.strptime(f"{today} 06:00", "%Y-%m-%d %H:%M")
+            
+            on_time_end = sch_start_dt + timedelta(hours=1, minutes=15)
+            
+            window_start = sch_start_dt - timedelta(hours=1)
+            
+            if window_start <= now <= on_time_end:
+                status = 'On Time'
+            elif now > on_time_end:
+                status = 'Late'
+            else:
+                status = 'On Time'
             
         new_record = Attendance(
             user_id=user_id,
@@ -507,89 +509,7 @@ def mark_attendance(user_id):
         return True
 
 
-@app.route('/api/attendance/login', methods=['POST'])
-def api_attendance_login():
-    """
-    Mark today's attendance as login (Present/On Time/Late) for a verified user.
-    Expects JSON: {"user_id": <int>}
-    """
-    if APP_ROLE != "LOCAL_KIOSK":
-        return jsonify({'status': 'error', 'message': 'Login not available on this service'}), 404
 
-    data = request.get_json(silent=True) or {}
-    user_id = data.get('user_id')
-    if not user_id:
-        return jsonify({'status': 'error', 'message': 'Missing user_id'}), 400
-
-    try:
-        uid = int(user_id)
-    except (TypeError, ValueError):
-        return jsonify({'status': 'error', 'message': 'Invalid user_id'}), 400
-
-    # Require recent liveness verification
-    now_ts = time.time()
-    last_verified = face_verification_cache.get(uid, 0)
-    if now_ts - last_verified > VERIFIED_TTL_SEC:
-        return jsonify({'status': 'error', 'message': 'Face verification expired. Please blink again.'}), 403
-
-    ok = mark_attendance(uid)
-    if not ok:
-        return jsonify({'status': 'ok', 'message': 'Attendance already recorded for today.'})
-    return jsonify({'status': 'ok', 'message': 'Login recorded.'})
-
-
-@app.route('/api/attendance/logout', methods=['POST'])
-def api_attendance_logout():
-    """
-    Mark today's attendance as Logout for a verified user.
-    Expects JSON: {"user_id": <int>}
-    """
-    if APP_ROLE != "LOCAL_KIOSK":
-        return jsonify({'status': 'error', 'message': 'Logout not available on this service'}), 404
-
-    data = request.get_json(silent=True) or {}
-    user_id = data.get('user_id')
-    if not user_id:
-        return jsonify({'status': 'error', 'message': 'Missing user_id'}), 400
-
-    try:
-        uid = int(user_id)
-    except (TypeError, ValueError):
-        return jsonify({'status': 'error', 'message': 'Invalid user_id'}), 400
-
-    now_ts = time.time()
-    last_verified = face_verification_cache.get(uid, 0)
-    if now_ts - last_verified > VERIFIED_TTL_SEC:
-        return jsonify({'status': 'error', 'message': 'Face verification expired. Please blink again.'}), 403
-
-    today = get_current_date()
-    today_start = datetime.strptime(today, "%Y-%m-%d")
-    today_end = today_start + timedelta(days=1)
-
-    existing_logout = Attendance.query.filter(
-        Attendance.user_id == uid,
-        Attendance.timestamp >= today_start,
-        Attendance.timestamp < today_end,
-        Attendance.status == 'Logout'
-    ).first()
-
-    if existing_logout:
-        return jsonify({'status': 'ok', 'message': 'Logout already recorded for today.'})
-
-    rec = Attendance(
-        user_id=uid,
-        status='Logout',
-        timestamp=get_now_pht(),
-        device_id=DEVICE_ID,
-    )
-    db.session.add(rec)
-    try:
-        db.session.commit()
-    except SQLAlchemyError:
-        db.session.rollback()
-        enqueue_offline_attendance(uid, get_now_pht(), 'Logout')
-
-    return jsonify({'status': 'ok', 'message': 'Logout recorded.'})
 
 
 @app.before_request
@@ -1112,6 +1032,78 @@ def edit_user(user_id):
     else:
         flash('Invalid request.', 'danger')
     return redirect(url_for('admin'))
+
+@app.route('/api/attendance/record', methods=['POST'])
+def api_attendance_record():
+    try:
+        if APP_ROLE != "LOCAL_KIOSK":
+            return jsonify({'status': 'error', 'message': 'Recording not available on this service'}), 404
+
+        data = request.get_json(silent=True) or {}
+        user_id = data.get('user_id')
+        action = data.get('action')  # 'login' or 'logout'
+
+        if not all([user_id, action]):
+            return jsonify({'status': 'error', 'message': 'Missing user_id or action'}), 400
+
+        try:
+            uid = int(user_id)
+        except (ValueError, TypeError):
+            return jsonify({'status': 'error', 'message': 'Invalid user_id format'}), 400
+
+        user = db.session.get(User, uid)
+        if not user:
+            return jsonify({'status': 'error', 'message': 'User not found'}), 404
+
+        now = get_now_pht()
+        
+        # Check for existing records for the same action today
+        existing_today = Attendance.query.filter(
+            Attendance.user_id == uid,
+            db.func.date(Attendance.timestamp) == now.date(),
+            Attendance.status.ilike(action) # Case-insensitive check for 'login' or 'logout'
+        ).first()
+
+        if existing_today:
+            return jsonify({'status': 'error', 'message': f'You have already recorded a {action} for today.'}), 409
+
+        if action.lower() == 'login':
+            sch_start_str = user.schedule_start or "06:00"
+            try:
+                sch_start_dt = now.replace(hour=int(sch_start_str[:2]), minute=int(sch_start_str[3:]), second=0, microsecond=0)
+            except ValueError:
+                sch_start_dt = now.replace(hour=6, minute=0, second=0, microsecond=0)
+
+            on_time_end = sch_start_dt + timedelta(minutes=15)
+
+            if now <= on_time_end:
+                status = 'On Time'
+            else:
+                status = 'Late'
+            
+            message = f"LOGIN ENDPOINT HIT"
+
+        elif action.lower() == 'logout':
+            status = 'Logout'
+            message = f"LOGOUT ENDPOINT HIT"
+        
+        else:
+            return jsonify({'status': 'error', 'message': 'Invalid action specified'}), 400
+
+        new_record = Attendance(
+            user_id=uid,
+            status=status,
+            timestamp=now,
+            device_id=DEVICE_ID,
+        )
+        db.session.add(new_record)
+        db.session.commit()
+
+        return jsonify({'status': 'success', 'message': message})
+
+    except Exception as e:
+        traceback.print_exc()
+        raise e
 
 @app.route('/manual_attendance', methods=['POST'])
 def manual_attendance():

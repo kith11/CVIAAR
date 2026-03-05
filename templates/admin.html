@@ -268,16 +268,41 @@
             .attr("class", "axis-label");
 
         // Bars
-        svg.selectAll(".bar-present")
-            .data(trends.present)
+        const barGroups = svg.selectAll(".bar-group")
+            .data(trends.labels)
             .enter()
-            .append("rect")
-            .attr("class", "bar")
-            .attr("x", (d, i) => x(trends.labels[i]))
-            .attr("y", d => y(d))
+            .append("g")
+            .attr("transform", d => `translate(${x(d)}, 0)`);
+
+        // Present bars
+        barGroups.append("rect")
+            .attr("y", (d, i) => y(trends.present[i]))
+            .attr("height", (d, i) => height - y(trends.present[i]))
             .attr("width", x.bandwidth())
-            .attr("height", d => height - y(d))
-            .attr("rx", 4);
+            .attr("fill", "var(--bs-success)");
+
+        barGroups.append("text")
+            .text((d, i) => trends.present[i])
+            .attr("x", x.bandwidth() / 2)
+            .attr("y", (d, i) => y(trends.present[i]) - 5)
+            .attr("text-anchor", "middle")
+            .attr("font-size", "12px")
+            .attr("fill", "var(--bs-body-color)");
+
+        // Tardy bars
+        barGroups.append("rect")
+            .attr("y", (d, i) => y(trends.tardy[i]))
+            .attr("height", (d, i) => height - y(trends.tardy[i]))
+            .attr("width", x.bandwidth())
+            .attr("fill", "var(--bs-warning)");
+
+        barGroups.append("text")
+            .text((d, i) => trends.tardy[i])
+            .attr("x", x.bandwidth() / 2)
+            .attr("y", (d, i) => y(trends.tardy[i]) - 5)
+            .attr("text-anchor", "middle")
+            .attr("font-size", "12px")
+            .attr("fill", "var(--bs-body-color)");
     }
 
     function confirmDelete(id, name) {
