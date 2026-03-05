@@ -45,6 +45,46 @@
             <div id="attendance-d3-chart" class="d3-chart"></div>
         </div>
 
+        <!-- Risk Prediction Table -->
+        <div class="card p-0 overflow-hidden mb-4">
+            <div class="p-4 border-bottom d-flex justify-content-between align-items-center">
+                <div class="fw-bold"><i class="bi bi-exclamation-triangle me-2 text-warning"></i>Attendance Risk Insights</div>
+                <span class="badge bg-light text-dark border-0 small">PREDICTIVE</span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0" id="risk-table">
+                    <thead>
+                        <tr>
+                            <th class="ps-4">Name</th>
+                            <th class="text-center">Late Rate</th>
+                            <th class="text-center">Absent Rate</th>
+                            <th class="text-center">Risk Level</th>
+                            <th class="pe-4">Prediction</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if risks %}
+                            {% for risk in risks %}
+                            <tr>
+                                <td class="ps-4 fw-bold">{{ risk.name }}</td>
+                                <td class="text-center">{{ risk.late_rate }}</td>
+                                <td class="text-center">{{ risk.absent_rate }}</td>
+                                <td class="text-center">
+                                    <span class="badge bg-{{ 'danger' if risk.risk_level == 'High' else 'warning' if risk.risk_level == 'Medium' else 'info' }}">
+                                        {{ risk.risk_level }}
+                                    </span>
+                                </td>
+                                <td class="pe-4 small text-muted">{{ risk.prediction }}</td>
+                            </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr><td colspan="5" class="text-center py-4 text-muted">No high-risk users detected.</td></tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- User Status Table -->
         <div class="card p-0 overflow-hidden">
             <div class="p-4 d-flex justify-content-between align-items-center">

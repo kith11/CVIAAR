@@ -157,8 +157,8 @@ class AnalyticsEngine:
             if risk_level != "Low":
                 risk_report.append({
                     'name': user.name,
-                    'late_rate': round(late_rate, 1),
-                    'absent_rate': round(absent_rate, 1),
+                    'late_rate': f"{round(late_rate, 1)}%",
+                    'absent_rate': f"{round(absent_rate, 1)}%",
                     'risk_level': risk_level,
                     'prediction': prediction
                 })

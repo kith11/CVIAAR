@@ -7,6 +7,9 @@ import base64
 import sqlite3
 import random
 import pytz
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from flask import Flask, render_template, Response, request, redirect, url_for, jsonify, flash, session
 from functools import wraps
@@ -65,6 +68,14 @@ app.config["SQLALCHEMY_DATABASE_URI"] = local_sqlite_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.secret_key = os.getenv("SECRET_KEY", "default_dev_key")
 app.config["ADMIN_PASSWORD"] = os.getenv("ADMIN_PASSWORD", "admin123")
+
+# Mail Settings
+app.config["MAIL_SERVER"] = os.getenv("MAIL_SERVER", "smtp.gmail.com")
+app.config["MAIL_PORT"] = int(os.getenv("MAIL_PORT", 587))
+app.config["MAIL_USE_TLS"] = os.getenv("MAIL_USE_TLS", "True") == "True"
+app.config["MAIL_USERNAME"] = os.getenv("MAIL_USERNAME")
+app.config["MAIL_PASSWORD"] = os.getenv("MAIL_PASSWORD")
+app.config["MAIL_DEFAULT_SENDER"] = os.getenv("MAIL_DEFAULT_SENDER", app.config["MAIL_USERNAME"])
 
 # Security Settings
 app.config.update(
@@ -1591,6 +1602,125 @@ def chat():
         print(f"Chat Error: {e}")
         return jsonify({'response': "I'm having trouble connecting to my brain right now. Please try again later."})
 
+def send_analytical_email(user, logs, is_early=False):
+    """Sends a beautifully formatted HTML analytical report to the user's Gmail."""
+    if not user.email:
+        print(f"No email for user {user.name}")
+        return False
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = app.config["MAIL_DEFAULT_SENDER"]
+        msg['To'] = user.email
+        msg['Subject'] = f"Attendance Analytical Report - {user.name}"
+        if is_early:
+            msg['Subject'] = f"Early Record Request - {user.name}"
+
+        # Calculate basic stats
+        total = len(logs)
+        present = sum(1 for l in logs if l.status in ['Present', 'On Time'])
+        late = sum(1 for l in logs if l.status in ['Late', 'Tardy'])
+        absent = sum(1 for l in logs if l.status == 'Absent')
+        
+        rate = (present / total * 100) if total > 0 else 0
+
+        html = f"""
+        <html>
+        <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; line-height: 1.6;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+                <h2 style="color: #2c3e50; text-align: center; border-bottom: 2px solid #3498db; padding-bottom: 10px;">
+                    { 'Early Attendance Record' if is_early else '30-Day Attendance Analysis' }
+                </h2>
+                
+                <p>Hello <strong>{user.name}</strong>,</p>
+                <p>Here is your attendance summary as of {get_now_pht().strftime('%B %d, %Y')}:</p>
+                
+                <div style="display: flex; justify-content: space-around; background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 0.8rem; color: #7f8c8d; text-transform: uppercase;">Presence</div>
+                        <div style="font-size: 1.2rem; font-weight: bold; color: #27ae60;">{present}</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 0.8rem; color: #7f8c8d; text-transform: uppercase;">Late</div>
+                        <div style="font-size: 1.2rem; font-weight: bold; color: #f39c12;">{late}</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 0.8rem; color: #7f8c8d; text-transform: uppercase;">Absent</div>
+                        <div style="font-size: 1.2rem; font-weight: bold; color: #e74c3c;">{absent}</div>
+                    </div>
+                </div>
+
+                <div style="background: #eef2f7; padding: 10px; border-radius: 5px; text-align: center; margin-bottom: 20px;">
+                    <strong>Attendance Rate:</strong> {rate:.1f}%
+                </div>
+
+                <h3 style="color: #2c3e50; border-left: 4px solid #3498db; padding-left: 10px;">Recent Logs</h3>
+                <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+                    <thead>
+                        <tr style="background: #3498db; color: white;">
+                            <th style="padding: 10px; text-align: left;">Date & Time</th>
+                            <th style="padding: 10px; text-align: left;">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        """
+        
+        for log in logs[:10]: # Show last 10 logs
+            color = "#27ae60" if log.status in ['Present', 'On Time'] else "#f39c12" if log.status in ['Late', 'Tardy'] else "#e74c3c"
+            html += f"""
+                        <tr style="border-bottom: 1px solid #eee;">
+                            <td style="padding: 10px;">{log.timestamp.strftime('%Y-%m-%d %I:%M %p')}</td>
+                            <td style="padding: 10px; color: {color}; font-weight: bold;">{log.status}</td>
+                        </tr>
+            """
+
+        html += """
+                    </tbody>
+                </table>
+                
+                <p style="font-size: 0.8rem; color: #95a5a6; margin-top: 30px; text-align: center; border-top: 1px solid #eee; padding-top: 10px;">
+                    This is an automated report from the CVIAAR Attendance System.<br>
+                    Please do not reply to this email.
+                </p>
+            </div>
+        </body>
+        </html>
+        """
+        
+        msg.attach(MIMEText(html, 'html'))
+
+        server = smtplib.SMTP(app.config["MAIL_SERVER"], app.config["MAIL_PORT"])
+        if app.config["MAIL_USE_TLS"]:
+            server.starttls()
+        server.login(app.config["MAIL_USERNAME"], app.config["MAIL_PASSWORD"])
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+        return False
+
+def check_and_send_monthly_reports():
+    """Checks all users and sends reports if 30 days have passed since the last one."""
+    users = User.query.all()
+    now = get_now_pht()
+    
+    for user in users:
+        # Check if 30 days passed or if first time
+        if not user.last_report_sent or (now - user.last_report_sent.replace(tzinfo=PHT)).days >= 30:
+            # Fetch last 30 days of logs
+            start_date = now - timedelta(days=30)
+            logs = Attendance.query.filter(
+                Attendance.user_id == user.id,
+                Attendance.timestamp >= start_date
+            ).order_by(Attendance.timestamp.desc()).all()
+            
+            if logs:
+                if send_analytical_email(user, logs):
+                    user.last_report_sent = now
+                    db.session.commit()
+                    print(f"Monthly report sent to {user.name}")
+
 def scheduler_run():
     global last_auto_logout_date
     gc_counter = 0
@@ -1609,6 +1739,7 @@ def scheduler_run():
             if last_auto_logout_date != get_current_date() and now >= auto_time:
                 with app.app_context():
                     auto_logout_missing()
+                    check_and_send_monthly_reports()
                 last_auto_logout_date = get_current_date()
         except Exception:
             pass
@@ -1651,6 +1782,32 @@ def audit_logs():
     ).order_by(AttendanceEdit.edited_at.desc()).limit(100).all()
     
     return render_template('audit_logs.html', edits=edits)
+
+@app.route('/request_early_report', methods=['POST'])
+def request_early_report():
+    staff_code = request.form.get('staff_code')
+    if not staff_code:
+        flash('Staff code required.', 'danger')
+        return redirect(url_for('staff_portal'))
+        
+    user = User.query.filter_by(staff_code=staff_code).first()
+    if not user:
+        flash('Staff ID not found.', 'danger')
+        return redirect(url_for('staff_portal'))
+        
+    if not user.email:
+        flash('No email address associated with your account. Please contact admin.', 'warning')
+        return redirect(url_for('staff_portal'))
+        
+    # Fetch logs (last 30 days or all recent)
+    logs = Attendance.query.filter_by(user_id=user.id).order_by(Attendance.timestamp.desc()).limit(100).all()
+    
+    if send_analytical_email(user, logs, is_early=True):
+        flash(f'Early analytical report has been sent to {user.email}!', 'success')
+    else:
+        flash('Failed to send email. Please try again later.', 'danger')
+        
+    return redirect(url_for('staff_portal'))
 
 @app.route('/staff_portal', methods=['GET', 'POST'])
 def staff_portal():
