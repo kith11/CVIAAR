@@ -8,8 +8,6 @@ services:
       - ./data:/app/data
     env_file:
       - .env
-    environment:
-      - FLASK_ENV=production
     dns:
       - 8.8.8.8
       - 8.8.4.4

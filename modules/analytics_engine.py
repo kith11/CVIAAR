@@ -129,7 +129,7 @@ class AnalyticsEngine:
             return []
 
         risk_report = []
-        users = User.query.all()
+        users = self.db.query(User).all()
 
         for user in users:
             user_logs = df[df['user_id'] == user.id]

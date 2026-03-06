@@ -24,8 +24,8 @@ RUN pip install --default-timeout=600 --no-cache-dir -r requirements.txt
 # Copy the rest of the application code
 COPY . /app
 
-# Expose port 5000 for Flask
+# Expose port 5000 for FastAPI
 EXPOSE 5000
 
-# Run the application using Gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
+# Run the application using Uvicorn
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5000"]

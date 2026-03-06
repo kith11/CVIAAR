@@ -1,67 +1,69 @@
-from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
+from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
 import uuid
 
-db = SQLAlchemy()
+Base = declarative_base()
 
 
-class User(db.Model):
+class User(Base):
     __tablename__ = "users"
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    email = db.Column(db.String(120), nullable=True)
-    staff_code = db.Column(db.String(6), unique=True, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.now)
-    schedule_start = db.Column(db.String(5), default="06:00")
-    schedule_end = db.Column(db.String(5), default="19:00")
-    employment_type = db.Column(db.String(20), default="Full-time")
-    role = db.Column(db.String(20), default="staff")  # roles: staff, admin
-    last_report_sent = db.Column(db.DateTime, nullable=True)
-    attendances = db.relationship("Attendance", backref="user", lazy=True)
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    email = Column(String(120), nullable=True)
+    staff_code = Column(String(6), unique=True, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    schedule_start = Column(String(5), default="06:00")
+    schedule_end = Column(String(5), default="19:00")
+    employment_type = Column(String(20), default="Full-time")
+    role = Column(String(20), default="staff")  # roles: staff, admin
+    last_report_sent = Column(DateTime, nullable=True)
+    attendances = relationship("Attendance", back_populates="user", lazy=True)
 
 
-class Attendance(db.Model):
+class Attendance(Base):
     __tablename__ = "attendance_logs"
 
-    id = db.Column(db.Integer, primary_key=True)
-    sync_key = db.Column(db.String(36), unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
-    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.now)
-    status = db.Column(db.String(20), nullable=False)
-    notes = db.Column(db.String(200), nullable=True)
-    device_id = db.Column(db.String(50), nullable=True)
-    synced_at = db.Column(db.DateTime, nullable=True)
+    id = Column(Integer, primary_key=True)
+    sync_key = Column(String(36), unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    timestamp = Column(DateTime, default=datetime.now)
+    status = Column(String(20), nullable=False)
+    notes = Column(String(200), nullable=True)
+    device_id = Column(String(50), nullable=True)
+    synced_at = Column(DateTime, nullable=True)
+    user = relationship("User", back_populates="attendances")
 
 
-class AttendanceEdit(db.Model):
+class AttendanceEdit(Base):
     __tablename__ = "attendance_edits"
 
-    id = db.Column(db.Integer, primary_key=True)
-    attendance_id = db.Column(db.Integer, db.ForeignKey("attendance_logs.id"), nullable=False)
-    previous_status = db.Column(db.String(20), nullable=False)
-    new_status = db.Column(db.String(20), nullable=False)
-    previous_notes = db.Column(db.String(200), nullable=True)
-    new_notes = db.Column(db.String(200), nullable=True)
-    edited_by = db.Column(db.String(100), nullable=True)
-    edited_at = db.Column(db.DateTime, default=datetime.now)
+    id = Column(Integer, primary_key=True)
+    attendance_id = Column(Integer, ForeignKey("attendance_logs.id"), nullable=False)
+    previous_status = Column(String(20), nullable=False)
+    new_status = Column(String(20), nullable=False)
+    previous_notes = Column(String(200), nullable=True)
+    new_notes = Column(String(200), nullable=True)
+    edited_by = Column(String(100), nullable=True)
+    edited_at = Column(DateTime, default=datetime.now)
 
 
-class ExcuseNote(db.Model):
+class ExcuseNote(Base):
     __tablename__ = "excuse_notes"
 
-    id = db.Column(db.Integer, primary_key=True)
-    attendance_id = db.Column(db.Integer, db.ForeignKey("attendance_logs.id"), nullable=False)
-    note = db.Column(db.String(500), nullable=False)
-    created_by = db.Column(db.String(100), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.now)
+    id = Column(Integer, primary_key=True)
+    attendance_id = Column(Integer, ForeignKey("attendance_logs.id"), nullable=False)
+    note = Column(String(500), nullable=False)
+    created_by = Column(String(100), nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
 
 
-class Device(db.Model):
+class Device(Base):
     __tablename__ = "devices"
 
-    id = db.Column(db.Integer, primary_key=True)
-    device_id = db.Column(db.String(50), unique=True, nullable=False)
-    name = db.Column(db.String(100), nullable=True)
-    location = db.Column(db.String(200), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.now)
+    id = Column(Integer, primary_key=True)
+    device_id = Column(String(50), unique=True, nullable=False)
+    name = Column(String(100), nullable=True)
+    location = Column(String(200), nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
