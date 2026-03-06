@@ -45,23 +45,47 @@
         </div>
 
         <!-- Attendance Controls (Below Feed) -->
-        <div id="attendance-actions" class="card mt-4 p-4 d-none border-0 shadow-sm" style="background: #f8f9fa; border-left: 5px solid var(--accent) !important;">
-            <div class="d-flex flex-column flex-md-row align-items-center justify-content-between gap-4">
-                <div class="text-center text-md-start">
-                    <div class="text-muted smaller text-uppercase fw-bold mb-1" style="letter-spacing: 0.1em;">Identity Verified</div>
-                    <h3 class="mb-0 fw-bold text-dark" id="attendance-name">---</h3>
+        <div id="attendance-actions" class="card mt-4 p-0 d-none border-0 overflow-hidden shadow-sm">
+            <div class="p-4 border-bottom bg-light">
+                <div class="fw-bold small text-uppercase text-muted" style="letter-spacing: 0.05em;">
+                    <i class="bi bi-shield-check me-2 text-success"></i>Identity Verified
                 </div>
-                <div class="text-center">
-                    <div class="btn-group btn-group-lg shadow-sm">
-                        <button id="btn-login" type="button" class="btn btn-primary px-5 fw-bold" style="background: #28a745; border-color: #28a745;">
-                            <i class="bi bi-box-arrow-in-right me-2"></i>Log in
-                        </button>
-                        <button id="btn-logout" type="button" class="btn btn-outline-dark px-5 fw-bold">
-                            <i class="bi bi-box-arrow-right me-2"></i>Log out
-                        </button>
+            </div>
+            <div class="card-body p-4">
+                <div class="d-flex flex-column flex-md-row align-items-center justify-content-between gap-4">
+                    <div class="text-center text-md-start">
+                        <h2 class="mb-0 fw-bold text-dark" id="attendance-name">---</h2>
+                        <p class="text-muted small mb-0">Please ensure you have logged out before logging in again in the afternoon.</p>
                     </div>
-                    <div class="small text-warning mt-2 d-none fw-bold" id="attendance-message"></div>
+                    <div class="text-center">
+                        <div class="btn-group shadow-sm">
+                            <button id="btn-login" type="button" class="btn btn-primary px-5 py-3 fw-bold border-0" style="background: #198754;">
+                                <i class="bi bi-box-arrow-in-right me-2"></i>Log in
+                            </button>
+                            <button id="btn-logout" type="button" class="btn btn-outline-dark px-5 py-3 fw-bold">
+                                <i class="bi bi-box-arrow-right me-2"></i>Log out
+                            </button>
+                        </div>
+                    </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Toast Container -->
+    <div class="toast-container position-fixed bottom-0 start-50 translate-middle-x p-3" style="z-index: 3000;">
+        <div id="attendanceToast" class="toast align-items-center text-white border-0 shadow-lg" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body p-3">
+                    <div class="d-flex align-items-center">
+                        <i id="toastIcon" class="bi fs-4 me-3"></i>
+                        <div>
+                            <div class="fw-bold" id="toastTitle">Success</div>
+                            <div id="toastMessage">Attendance recorded successfully.</div>
+                        </div>
+                    </div>
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
             </div>
         </div>
     </div>
@@ -191,330 +215,362 @@
 </style>
 
 <script>
-    // Clock Logic
-    function updateClock() {
-        const now = new Date();
-        // Force Asia/Manila (PHT) timezone
-        const timeOptions = { 
-            timeZone: 'Asia/Manila', 
-            hour: '2-digit', 
-            minute: '2-digit', 
-            hour12: true 
-        };
-        const dateOptions = { 
-            timeZone: 'Asia/Manila', 
-            weekday: 'short', 
-            day: '2-digit', 
-            month: 'short', 
-            year: 'numeric' 
-        };
-        
-        document.getElementById('clock-time').textContent = now.toLocaleTimeString('en-US', timeOptions);
-        document.getElementById('clock-date').textContent = now.toLocaleDateString('en-US', dateOptions);
-    }
-    setInterval(updateClock, 1000);
-    updateClock();
+    document.addEventListener('DOMContentLoaded', () => {
+        // Clock Logic
+        function updateClock() {
+            const now = new Date();
+            // Force Asia/Manila (PHT) timezone
+            const timeOptions = { 
+                timeZone: 'Asia/Manila', 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                hour12: true 
+            };
+            const dateOptions = { 
+                timeZone: 'Asia/Manila', 
+                weekday: 'short', 
+                day: '2-digit', 
+                month: 'short', 
+                year: 'numeric' 
+            };
+            
+            document.getElementById('clock-time').textContent = now.toLocaleTimeString('en-US', timeOptions);
+            document.getElementById('clock-date').textContent = now.toLocaleDateString('en-US', dateOptions);
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
 
-    // Recent Logs Polling
-    function fetchRecentLogs() {
-        fetch('/api/recent_logs')
+        // Recent Logs Polling
+        function fetchRecentLogs() {
+            fetch('/api/recent_logs')
+                .then(response => response.json())
+                .then(data => {
+                    const list = document.getElementById('recent-logs-list');
+                    if (data.length === 0) {
+                        list.innerHTML = '<div class="text-center py-5 text-muted small">No recent logs</div>';
+                        return;
+                    }
+                    
+                    let html = '';
+                    data.forEach(log => {
+                        html += `
+                            <div class="list-group-item border-0 border-bottom p-3">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <div class="fw-bold small">${log.name}</div>
+                                        <div class="text-muted smaller" style="font-size: 0.7rem;">${log.time}</div>
+                                    </div>
+                                    <span class="badge bg-${log.color} bg-opacity-10 text-${log.color} border-0 small">${log.status}</span>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    list.innerHTML = html;
+                })
+                .catch(err => console.error('Error fetching logs:', err));
+        }
+
+        fetchRecentLogs();
+        setInterval(fetchRecentLogs, 5000);
+        
+        // Recognition Engine Integration
+        const video = document.getElementById('video');
+        const overlayCanvas = document.getElementById('overlay');
+        const overlayCtx = overlayCanvas.getContext('2d');
+        const captureCanvas = document.getElementById('capture-canvas');
+        const captureCtx = captureCanvas.getContext('2d');
+        const statusMsg = document.getElementById('status-message');
+        const statusOverlay = document.getElementById('status-overlay');
+        const attendanceActions = document.getElementById('attendance-actions');
+        const attendanceName = document.getElementById('attendance-name');
+        const attendanceMessage = document.getElementById('attendance-message');
+        const btnLogin = document.getElementById('btn-login');
+        const btnLogout = document.getElementById('btn-logout');
+
+        const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(window.location.hostname);
+        let cameraStream = null;
+        let processIntervalId = null;
+        let recognizeBusy = false;
+        let lastFaces = [];
+        let lastFacesTime = 0;
+        let currentVerifiedUserId = null;
+        let currentVerifiedUserName = null;
+
+        function stopCamera() {
+            if (processIntervalId) {
+                clearInterval(processIntervalId);
+                processIntervalId = null;
+            }
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(t => t.stop());
+                cameraStream = null;
+            }
+            if (video) {
+                video.srcObject = null;
+            }
+            statusMsg.textContent = "Standby mode";
+            statusOverlay.style.background = "rgba(0,0,0,0.8)";
+        }
+
+        function startCamera() {
+            if (!isLocal || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                statusMsg.textContent = "System in remote standby";
+                return;
+            }
+            if (cameraStream) {
+                return; // already running
+            }
+            navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: { ideal: 15, max: 15 } } })
+                .then(stream => {
+                    cameraStream = stream;
+                    video.srcObject = stream;
+                    statusMsg.textContent = "Scanning for identity...";
+                    statusOverlay.style.background = "rgba(0,0,0,0.5)";
+                    processIntervalId = setInterval(processFrame, 250);
+                })
+                .catch(err => {
+                    console.error("Camera error:", err);
+                    const name = (err && err.name) ? err.name : 'Error';
+                    const msg = (err && err.message) ? err.message : '';
+                    statusMsg.textContent = `Camera error: ${name}${msg ? ' — ' + msg : ''}`;
+                    statusOverlay.classList.add('bg-danger');
+                });
+        }
+
+        // Start camera immediately on load (for local kiosk)
+        startCamera();
+
+        function processFrame() {
+            if (recognizeBusy || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+            overlayCanvas.width = video.videoWidth;
+            overlayCanvas.height = video.videoHeight;
+            captureCanvas.width = video.videoWidth;
+            captureCanvas.height = video.videoHeight;
+            captureCtx.drawImage(video, 0, 0);
+            const dataURL = captureCanvas.toDataURL('image/jpeg', 0.6); 
+
+            recognizeBusy = true;
+
+            fetch('/api/recognize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: dataURL })
+            })
             .then(response => response.json())
             .then(data => {
-                const list = document.getElementById('recent-logs-list');
-                if (data.length === 0) {
-                    list.innerHTML = '<div class="text-center py-5 text-muted small">No recent logs</div>';
-                    return;
+                overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+                overlayCtx.save();
+                overlayCtx.scale(-1, 1);
+                overlayCtx.translate(-overlayCanvas.width, 0);
+                
+                if (data.status === 'success' && data.faces.length > 0) {
+                    lastFaces = data.faces;
+                    lastFacesTime = Date.now();
+                } else if (Date.now() - lastFacesTime < 20000 && lastFaces.length > 0) {
+                    data.status = 'success';
+                    data.faces = lastFaces;
                 }
-                
-                let html = '';
-                data.forEach(log => {
-                    html += `
-                        <div class="list-group-item border-0 border-bottom p-3">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <div>
-                                    <div class="fw-bold small">${log.name}</div>
-                                    <div class="text-muted smaller" style="font-size: 0.7rem;">${log.time}</div>
-                                </div>
-                                <span class="badge bg-${log.color} bg-opacity-10 text-${log.color} border-0 small">${log.status}</span>
-                            </div>
-                        </div>
-                    `;
-                });
-                list.innerHTML = html;
-            })
-            .catch(err => console.error('Error fetching logs:', err));
-    }
 
-    fetchRecentLogs();
-    setInterval(fetchRecentLogs, 5000);
-    
-    // Recognition Engine Integration
-    const video = document.getElementById('video');
-    const overlayCanvas = document.getElementById('overlay');
-    const overlayCtx = overlayCanvas.getContext('2d');
-    const captureCanvas = document.getElementById('capture-canvas');
-    const captureCtx = captureCanvas.getContext('2d');
-    const statusMsg = document.getElementById('status-message');
-    const statusOverlay = document.getElementById('status-overlay');
-    const attendanceActions = document.getElementById('attendance-actions');
-    const attendanceName = document.getElementById('attendance-name');
-    const attendanceMessage = document.getElementById('attendance-message');
-    const btnLogin = document.getElementById('btn-login');
-    const btnLogout = document.getElementById('btn-logout');
-
-    const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(window.location.hostname);
-    let cameraStream = null;
-    let processIntervalId = null;
-    let recognizeBusy = false;
-    let lastFaces = [];
-    let lastFacesTime = 0;
-    let currentVerifiedUserId = null;
-    let currentVerifiedUserName = null;
-
-    function stopCamera() {
-        if (processIntervalId) {
-            clearInterval(processIntervalId);
-            processIntervalId = null;
-        }
-        if (cameraStream) {
-            cameraStream.getTracks().forEach(t => t.stop());
-            cameraStream = null;
-        }
-        if (video) {
-            video.srcObject = null;
-        }
-        statusMsg.textContent = "Standby mode";
-        statusOverlay.style.background = "rgba(0,0,0,0.8)";
-    }
-
-    function startCamera() {
-        if (!isLocal || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            statusMsg.textContent = "System in remote standby";
-            return;
-        }
-        if (cameraStream) {
-            return; // already running
-        }
-        navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: { ideal: 15, max: 15 } } })
-            .then(stream => {
-                cameraStream = stream;
-                video.srcObject = stream;
-                statusMsg.textContent = "Scanning for identity...";
-                statusOverlay.style.background = "rgba(0,0,0,0.5)";
-                processIntervalId = setInterval(processFrame, 400);
-            })
-            .catch(err => {
-                console.error("Camera error:", err);
-                const name = (err && err.name) ? err.name : 'Error';
-                const msg = (err && err.message) ? err.message : '';
-                statusMsg.textContent = `Camera error: ${name}${msg ? ' — ' + msg : ''}`;
-                statusOverlay.classList.add('bg-danger');
-            });
-    }
-
-    // Start camera immediately on load (for local kiosk)
-    startCamera();
-
-    function processFrame() {
-        if (recognizeBusy || video.readyState !== video.HAVE_ENOUGH_DATA) return;
-
-        overlayCanvas.width = video.videoWidth;
-        overlayCanvas.height = video.videoHeight;
-        captureCanvas.width = video.videoWidth;
-        captureCanvas.height = video.videoHeight;
-        captureCtx.drawImage(video, 0, 0);
-        const dataURL = captureCanvas.toDataURL('image/jpeg', 0.6); 
-
-        recognizeBusy = true;
-
-        fetch('/api/recognize', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: dataURL })
-        })
-        .then(response => response.json())
-        .then(data => {
-            overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-            overlayCtx.save();
-            overlayCtx.scale(-1, 1);
-            overlayCtx.translate(-overlayCanvas.width, 0);
-            
-            if (data.status === 'success' && data.faces.length > 0) {
-                lastFaces = data.faces;
-                lastFacesTime = Date.now();
-            } else if (Date.now() - lastFacesTime < 20000 && lastFaces.length > 0) {
-                data.status = 'success';
-                data.faces = lastFaces;
-            }
-
-            if (data.status === 'success' && data.faces.length > 0) {
-                let mainFace = data.faces[0]; 
-                
-                data.faces.forEach(face => {
-                    const [x, y, w, h] = face.rect;
-                    overlayCtx.lineWidth = 2;
-                    overlayCtx.strokeStyle = face.verified ? '#000' : '#666';
-                    overlayCtx.strokeRect(x, y, w, h);
+                if (data.status === 'success' && data.faces.length > 0) {
+                    let mainFace = data.faces[0]; 
                     
-                    // Label
-                    overlayCtx.scale(-1, 1);
-                    overlayCtx.font = "600 14px Inter, sans-serif";
-                    overlayCtx.fillStyle = "#000";
-                    overlayCtx.fillText(face.name.toUpperCase(), -(x + w), y - 10);
-                    overlayCtx.scale(-1, 1);
-                });
+                    data.faces.forEach(face => {
+                        const [x, y, w, h] = face.rect;
+                        overlayCtx.lineWidth = 2;
+                        overlayCtx.strokeStyle = face.verified ? '#000' : '#666';
+                        overlayCtx.strokeRect(x, y, w, h);
+                        
+                        // Label
+                        overlayCtx.scale(-1, 1);
+                        overlayCtx.font = "600 14px Inter, sans-serif";
+                        overlayCtx.fillStyle = "#000";
+                        overlayCtx.fillText(face.name.toUpperCase(), -(x + w), y - 10);
+                        overlayCtx.scale(-1, 1);
+                    });
 
-                if (mainFace.verified) {
-                    statusMsg.innerHTML = `IDENTITY VERIFIED: ${mainFace.name.toUpperCase()}`;
-                    statusOverlay.style.background = "rgba(0,0,0,0.8)";
-                    currentVerifiedUserId = mainFace.user_id || null;
-                    currentVerifiedUserName = mainFace.name || null;
-                    if (currentVerifiedUserId && currentVerifiedUserName && attendanceActions) {
-                        attendanceName.textContent = currentVerifiedUserName;
-                        attendanceActions.classList.remove('d-none');
-                        attendanceMessage.classList.add('d-none');
-                        attendanceMessage.textContent = '';
-                    }
-                } else if (mainFace.status === 'recognized') {
-                    statusMsg.innerHTML = `HELLO ${mainFace.name.toUpperCase()} — PLEASE BLINK`;
-                    currentVerifiedUserId = null;
-                    currentVerifiedUserName = null;
-                    if (attendanceActions) {
-                        attendanceActions.classList.add('d-none');
+                    if (mainFace.verified) {
+                        statusMsg.innerHTML = `IDENTITY VERIFIED: ${mainFace.name.toUpperCase()}`;
+                        statusOverlay.style.background = "rgba(0,0,0,0.8)";
+                        currentVerifiedUserId = mainFace.user_id || null;
+                        currentVerifiedUserName = mainFace.name || null;
+                        if (currentVerifiedUserId && currentVerifiedUserName && attendanceActions) {
+                            attendanceName.textContent = currentVerifiedUserName;
+                            attendanceActions.classList.remove('d-none');
+                            attendanceMessage.classList.add('d-none');
+                            attendanceMessage.textContent = '';
+                        }
+                    } else if (mainFace.status === 'recognized') {
+                        statusMsg.innerHTML = `HELLO ${mainFace.name.toUpperCase()} — PLEASE BLINK`;
+                        currentVerifiedUserId = null;
+                        currentVerifiedUserName = null;
+                        if (attendanceActions) {
+                            attendanceActions.classList.add('d-none');
+                        }
+                    } else {
+                        statusMsg.innerHTML = 'IDENTITY UNKNOWN';
+                        currentVerifiedUserId = null;
+                        currentVerifiedUserName = null;
+                        if (attendanceActions) {
+                            attendanceActions.classList.add('d-none');
+                        }
                     }
                 } else {
-                    statusMsg.innerHTML = 'IDENTITY UNKNOWN';
-                    currentVerifiedUserId = null;
-                    currentVerifiedUserName = null;
-                    if (attendanceActions) {
-                        attendanceActions.classList.add('d-none');
+                    if (lastFaces.length === 0) {
+                        statusMsg.innerHTML = 'SCANNING FOR IDENTITY...';
+                        statusOverlay.style.background = "rgba(0,0,0,0.5)";
+                        currentVerifiedUserId = null;
+                        currentVerifiedUserName = null;
+                        if (attendanceActions) {
+                            attendanceActions.classList.add('d-none');
+                        }
                     }
                 }
-            } else {
-                if (lastFaces.length === 0) {
-                    statusMsg.innerHTML = 'SCANNING FOR IDENTITY...';
-                    statusOverlay.style.background = "rgba(0,0,0,0.5)";
-                    currentVerifiedUserId = null;
-                    currentVerifiedUserName = null;
-                    if (attendanceActions) {
-                        attendanceActions.classList.add('d-none');
-                    }
-                }
-            }
-            overlayCtx.restore();
-        })
-        .finally(() => recognizeBusy = false);
-    }
-
-    // --- Attendance action handlers ---
-    function postJson(url, payload) {
-        console.log(`Posting to ${url} with payload:`, payload);
-        return fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload || {})
-        }).then(r => r.json());
-    }
-
-    if (btnLogin) {
-        btnLogin.addEventListener('click', () => {
-            if (!currentVerifiedUserId) {
-                attendanceMessage.textContent = 'Face verification required. Please blink again.';
-                attendanceMessage.classList.remove('d-none');
-                return;
-            }
-            attendanceMessage.textContent = 'Recording login...';
-            attendanceMessage.classList.remove('d-none');
-            postJson('/api/attendance/record', { user_id: currentVerifiedUserId, action: 'login' })
-                .then(res => {
-                    attendanceMessage.textContent = res.message || 'Login processed.';
-                })
-                .catch(() => {
-                    attendanceMessage.textContent = 'Unable to record login. Please try again.';
-                });
-        });
-    }
-
-    if (btnLogout) {
-        btnLogout.addEventListener('click', () => {
-            if (!currentVerifiedUserId) {
-                attendanceMessage.textContent = 'Face verification required. Please blink again.';
-                attendanceMessage.classList.remove('d-none');
-                return;
-            }
-            attendanceMessage.textContent = 'Recording logout...';
-            attendanceMessage.classList.remove('d-none');
-            postJson('/api/attendance/record', { user_id: currentVerifiedUserId, action: 'logout' })
-                .then(res => {
-                    attendanceMessage.textContent = res.message || 'Logout processed.';
-                })
-                .catch(() => {
-                    attendanceMessage.textContent = 'Unable to record logout. Please try again.';
-                });
-        });
-    }
-
-    // --- Standby / floating research names ---
-    // Research team credits
-    const researchMembers = [
-        "Margarette G. Biro (Leader)",
-        "Irish Jane N. Yungco (Co-Leader)",
-        "Sarah Jean M. Gonzales",
-        "Quirstine Ucel G. Polancos",
-        "Melet L. Avenido",
-        "Rowie Joy Maurillo",
-        "Melvin M. Singson",
-        "Sheena Saraum",
-        "Flora Mae Maratas",
-        "Jason G. Barrientos",
-        "Rian Kent D. Castro",
-        "John Marc Rusia",
-        "John Keith A. Barrientos"
-    ];
-
-    const standbyOverlay = document.getElementById('standby-overlay');
-    const standbyNamesEl = document.getElementById('standby-names');
-    let standbyActive = false;
-    let lastActivity = Date.now();
-    const STANDBY_AFTER_MS = 15000; // 15 seconds of inactivity
-
-    function markActivity() {
-        lastActivity = Date.now();
-        if (standbyActive) {
-            standbyActive = false;
-            standbyOverlay.classList.add('d-none');
-            // Resume camera when leaving standby
-            startCamera();
+                overlayCtx.restore();
+            })
+            .finally(() => recognizeBusy = false);
         }
-    }
 
-    ['mousemove', 'keydown', 'click', 'touchstart'].forEach(evt => {
-        window.addEventListener(evt, markActivity, { passive: true });
+        // --- Attendance action handlers ---
+        const attendanceToast = new bootstrap.Toast(document.getElementById('attendanceToast'));
+        const toastEl = document.getElementById('attendanceToast');
+        const toastIcon = document.getElementById('toastIcon');
+        const toastTitle = document.getElementById('toastTitle');
+        const toastMessage = document.getElementById('toastMessage');
+
+        function showNotification(title, message, isSuccess = true) {
+            toastEl.className = `toast align-items-center text-white border-0 shadow-lg ${isSuccess ? 'bg-success' : 'bg-danger'}`;
+            toastIcon.className = `bi fs-4 me-3 ${isSuccess ? 'bi-check-circle-fill' : 'bi-exclamation-triangle-fill'}`;
+            toastTitle.textContent = title;
+            toastMessage.textContent = message;
+            attendanceToast.show();
+        }
+
+        function postJson(url, payload) {
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload || {})
+            }).then(r => r.json());
+        }
+
+        if (btnLogin) {
+            btnLogin.addEventListener('click', () => {
+                if (!currentVerifiedUserId) return;
+                
+                btnLogin.disabled = true;
+                btnLogout.disabled = true;
+                
+                postJson('/api/attendance/record', { user_id: currentVerifiedUserId, action: 'login' })
+                    .then(res => {
+                        if (res.status === 'success') {
+                            showNotification('Log In Successful', res.message || `Welcome, ${currentVerifiedUserName}!`);
+                            // Hide actions after success to prevent double submission
+                            attendanceActions.classList.add('d-none');
+                            fetchRecentLogs(); // Refresh logs immediately
+                        } else {
+                            showNotification('Log In Failed', res.message || 'Error recording attendance.', false);
+                        }
+                    })
+                    .catch(() => {
+                        showNotification('System Error', 'Unable to connect to server.', false);
+                    })
+                    .finally(() => {
+                        btnLogin.disabled = false;
+                        btnLogout.disabled = false;
+                    });
+            });
+        }
+
+        if (btnLogout) {
+            btnLogout.addEventListener('click', () => {
+                if (!currentVerifiedUserId) return;
+
+                btnLogin.disabled = true;
+                btnLogout.disabled = true;
+
+                postJson('/api/attendance/record', { user_id: currentVerifiedUserId, action: 'logout' })
+                    .then(res => {
+                        if (res.status === 'success') {
+                            showNotification('Log Out Successful', res.message || `Goodbye, ${currentVerifiedUserName}!`);
+                            attendanceActions.classList.add('d-none');
+                            fetchRecentLogs();
+                        } else {
+                            showNotification('Log Out Failed', res.message || 'Error recording attendance.', false);
+                        }
+                    })
+                    .catch(() => {
+                        showNotification('System Error', 'Unable to connect to server.', false);
+                    })
+                    .finally(() => {
+                        btnLogin.disabled = false;
+                        btnLogout.disabled = false;
+                    });
+            });
+        }
+
+        // --- Standby / floating research names ---
+        // Research team credits
+        const researchMembers = [
+            "Margarette G. Biro (Leader)",
+            "Irish Jane N. Yungco (Co-Leader)",
+            "Sarah Jean M. Gonzales",
+            "Quirstine Ucel G. Polancos",
+            "Melet L. Avenido",
+            "Rowie Joy Maurillo",
+            "Melvin M. Singson",
+            "Sheena Saraum",
+            "Flora Mae Maratas",
+            "Jason G. Barrientos",
+            "Rian Kent D. Castro",
+            "John Marc Rusia",
+            "John Keith A. Barrientos"
+        ];
+
+        const standbyOverlay = document.getElementById('standby-overlay');
+        const standbyNamesEl = document.getElementById('standby-names');
+        let standbyActive = false;
+        let lastActivity = Date.now();
+        const STANDBY_AFTER_MS = 15000; // 15 seconds of inactivity
+
+        function markActivity() {
+            lastActivity = Date.now();
+            if (standbyActive) {
+                standbyActive = false;
+                standbyOverlay.classList.add('d-none');
+                // Resume camera when leaving standby
+                startCamera();
+            }
+        }
+
+        ['mousemove', 'keydown', 'click', 'touchstart'].forEach(evt => {
+            window.addEventListener(evt, markActivity, { passive: true });
+        });
+
+        function createFloatingNames() {
+            standbyNamesEl.innerHTML = '';
+            researchMembers.forEach((name, index) => {
+                const span = document.createElement('span');
+                span.className = 'standby-name';
+                span.textContent = name;
+                standbyNamesEl.appendChild(span);
+            });
+        }
+
+        function standbyLoop() {
+            const now = Date.now();
+            if (!standbyActive && now - lastActivity > STANDBY_AFTER_MS) {
+                standbyActive = true;
+                createFloatingNames();
+                standbyOverlay.classList.remove('d-none');
+                // Disable camera while in standby
+                stopCamera();
+            }
+            requestAnimationFrame(standbyLoop);
+        }
+
+        standbyOverlay.addEventListener('click', markActivity);
+        standbyLoop();
     });
-
-    function createFloatingNames() {
-        standbyNamesEl.innerHTML = '';
-        researchMembers.forEach((name, index) => {
-            const span = document.createElement('span');
-            span.className = 'standby-name';
-            span.textContent = name;
-            standbyNamesEl.appendChild(span);
-        });
-    }
-
-    function standbyLoop() {
-        const now = Date.now();
-        if (!standbyActive && now - lastActivity > STANDBY_AFTER_MS) {
-            standbyActive = true;
-            createFloatingNames();
-            standbyOverlay.classList.remove('d-none');
-            // Disable camera while in standby
-            stopCamera();
-        }
-        requestAnimationFrame(standbyLoop);
-    }
-
-    standbyOverlay.addEventListener('click', markActivity);
-    standbyLoop();
 </script>
 {% endblock %}

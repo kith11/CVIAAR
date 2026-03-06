@@ -134,11 +134,21 @@
         fetch('/api/train')
             .then(response => response.json())
             .then(data => {
-                window.location.href = '/admin';
+                if (data.status === 'success') {
+                    messageDiv.textContent = "Model updated! Redirecting...";
+                    setTimeout(() => {
+                        window.location.href = '/admin';
+                    }, 2000);
+                } else {
+                    messageDiv.textContent = "Error: " + data.message;
+                    statusOverlay.style.display = 'none';
+                    isTraining = false;
+                }
             })
             .catch(err => {
                 messageDiv.textContent = "Training failed. Check console.";
                 statusOverlay.style.display = 'none';
+                isTraining = false;
             });
     }
 </script>

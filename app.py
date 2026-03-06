@@ -25,21 +25,18 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy import create_engine, text, select, func
 from sqlalchemy.orm import sessionmaker, Session
 import numpy as np
-from dotenv import load_dotenv
-from openai import OpenAI, AuthenticationError
+from upstash_redis import Redis
 
+from config import settings
 from modules.models import Base, User, Attendance, AttendanceEdit, ExcuseNote
 from modules.camera import Camera
 from modules.face_engine import FaceEngine
 from modules.analytics_engine import AnalyticsEngine
 
-load_dotenv()
-
 app = FastAPI(title="CVIAAR Attendance System")
 
 # Session management
-SECRET_KEY = os.getenv("SECRET_KEY", "default_dev_key")
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 
 # Custom Flash Middleware
 class FlashMiddleware(BaseHTTPMiddleware):
@@ -96,8 +93,25 @@ def get_db():
     finally:
         db.close()
 
+# Redis Client
+redis = None
+if settings.UPSTASH_REDIS_URL and settings.UPSTASH_REDIS_TOKEN:
+    try:
+        redis = Redis(url=settings.UPSTASH_REDIS_URL, token=settings.UPSTASH_REDIS_TOKEN)
+        # Test connection
+        redis.ping()
+        print("Successfully connected to Upstash Redis.")
+    except Exception as e:
+        print(f"Error connecting to Upstash Redis: {e}")
+        redis = None
+
+def get_redis():
+    if not redis:
+        raise HTTPException(status_code=503, detail="Redis is not configured or available.")
+    return redis
+
 # Camera and Face Engine
-if APP_ROLE == "LOCAL_KIOSK":
+if settings.APP_ROLE == "LOCAL_KIOSK":
     camera = Camera()
     face_engine = FaceEngine(
         model_path=os.path.join(basedir, "data", "lbph_model.yml"),
@@ -125,7 +139,7 @@ def _env_float(key: str, default: float) -> float:
 
 LBPH_DISTANCE_THRESHOLD = _env_float("LBPH_DISTANCE_THRESHOLD", 95.0)
 RECOGNITION_CACHE_TTL_SEC = _env_float("RECOGNITION_CACHE_TTL_SEC", 2.0)
-BLINK_EAR_THRESHOLD = _env_float("BLINK_EAR_THRESHOLD", 0.20)
+BLINK_EAR_THRESHOLD = _env_float("BLINK_EAR_THRESHOLD", 0.25)
 BLINK_MAX_CLOSED_SEC = _env_float("BLINK_MAX_CLOSED_SEC", 2.5)
 VERIFIED_TTL_SEC = _env_float("VERIFIED_TTL_SEC", 20.0)
 
@@ -169,14 +183,16 @@ def render_template(request: Request, name: str, context: dict = {}):
 
 # Routes
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    if APP_ROLE == "ADMIN_DASHBOARD":
+async def index(request: Request, db: Session = Depends(get_db)):
+    if settings.APP_ROLE == "ADMIN_DASHBOARD":
         return RedirectResponse(url="/admin")
-    return render_template(request, "index.html")
+    
+    users = db.query(User).order_by(User.name).all()
+    return render_template(request, "index.html", {"users": users})
 
 @app.get("/video_feed")
 async def video_feed():
-    if APP_ROLE != "LOCAL_KIOSK":
+    if settings.APP_ROLE != "LOCAL_KIOSK":
         return RedirectResponse(url="/admin")
     return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
@@ -257,7 +273,7 @@ async def enroll_page(request: Request, user_id: int, db: Session = Depends(get_
 
 @app.post("/api/capture/{user_id}")
 async def api_capture(user_id: int, request: Request, db: Session = Depends(get_db)):
-    if APP_ROLE != "LOCAL_KIOSK":
+    if settings.APP_ROLE != "LOCAL_KIOSK":
         return JSONResponse({'status': 'error', 'message': 'Capture not available on this service'}, status_code=404)
     
     user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
@@ -300,7 +316,7 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
 
 @app.post("/api/recognize")
 async def api_recognize(request: Request, db: Session = Depends(get_db)):
-    if APP_ROLE != "LOCAL_KIOSK":
+    if settings.APP_ROLE != "LOCAL_KIOSK":
         return JSONResponse({'status': 'error', 'message': 'Recognition not available'}, status_code=404)
     
     data = await request.json()
@@ -386,7 +402,10 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
                     result['name'] = cached_user.name
                     result['status'] = 'recognized'
                     result['user_id'] = cached_user.id
-                    result['verified'] = True # Carry over verification
+                    # Check if this user was already verified recently
+                    last_verified = face_verification_cache.get(cached_user.id, 0)
+                    if now_ts - last_verified <= VERIFIED_TTL_SEC:
+                        result["verified"] = True
 
         results.append(result)
     
@@ -404,10 +423,40 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
 async def api_scan_status():
     return JSONResponse(scan_state)
 
-@app.post("/api/attendance/record")
-async def api_attendance_record(request: Request, db: Session = Depends(get_db)):
+@app.get("/api/live-status")
+async def api_live_status(redis: Redis = Depends(get_redis)):
+    today_str = get_now_pht().strftime("%Y-%m-%d")
+    live_set_key = f"attendance:{today_str}:present"
     try:
-        if APP_ROLE != "LOCAL_KIOSK":
+        present_count = redis.scard(live_set_key)
+        return JSONResponse({"status": "success", "present_count": present_count})
+    except Exception as e:
+        # This ensures that if Redis is down, the frontend doesn't crash.
+        # It will just show a stale count from the last successful SQL query.
+        print(f"Could not fetch live status from Redis: {e}")
+        raise HTTPException(status_code=503, detail="Live data is currently unavailable.")
+
+def write_attendance_to_sql(user_id: int, status: str, timestamp: datetime):
+    db = SessionLocal()
+    try:
+        new_record = Attendance(
+            user_id=user_id,
+            status=status,
+            timestamp=timestamp,
+            device_id=settings.DEVICE_ID,
+        )
+        db.add(new_record)
+        db.commit()
+        print(f"Successfully wrote attendance for user {user_id} to SQL.")
+    except Exception as e:
+        print(f"Error writing attendance to SQL for user {user_id}: {e}")
+    finally:
+        db.close()
+
+@app.post("/api/attendance/record")
+async def api_attendance_record(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), redis: Redis = Depends(get_redis)):
+    try:
+        if settings.APP_ROLE != "LOCAL_KIOSK":
             return JSONResponse({'status': 'error', 'message': 'Recording not available on this service'}, status_code=404)
 
         data = await request.json()
@@ -426,18 +475,24 @@ async def api_attendance_record(request: Request, db: Session = Depends(get_db))
         if not user:
             return JSONResponse({'status': 'error', 'message': 'User not found'}, status_code=404)
 
+        # --- Security Check: Liveness (Blink) Verification ---
+        now_ts = time.time()
+        last_verified = face_verification_cache.get(uid, 0)
+        if now_ts - last_verified > VERIFIED_TTL_SEC:
+            return JSONResponse({'status': 'error', 'message': 'Liveness verification required. Please blink at the camera.'}, status_code=403)
+
         now = get_now_pht()
+        today_str = now.strftime("%Y-%m-%d")
+        live_set_key = f"attendance:{today_str}:present"
         
         if action.lower() == 'login':
-            existing_login = db.query(Attendance).filter(
-                Attendance.user_id == uid,
-                func.date(Attendance.timestamp) == now.date(),
-                Attendance.status.in_(['On Time', 'Late'])
-            ).first()
+            # --- Live Layer (Redis) ---
+            if redis.sismember(live_set_key, uid):
+                return JSONResponse({'status': 'error', 'message': 'You are already logged in for today.'}, status_code=409)
+            
+            redis.sadd(live_set_key, uid)
 
-            if existing_login:
-                return JSONResponse({'status': 'error', 'message': 'You have already logged in for today.'}, status_code=409)
-
+            # --- Determine Status ---
             sch_start_str = user.schedule_start or "06:00"
             try:
                 sch_start_dt = now.replace(hour=int(sch_start_str[:2]), minute=int(sch_start_str[3:]), second=0, microsecond=0)
@@ -445,38 +500,23 @@ async def api_attendance_record(request: Request, db: Session = Depends(get_db))
                 sch_start_dt = now.replace(hour=6, minute=0, second=0, microsecond=0)
 
             on_time_end = sch_start_dt + timedelta(minutes=15)
-
-            if now <= on_time_end:
-                status = 'On Time'
-            else:
-                status = 'Late'
-            
+            status = 'On Time' if now <= on_time_end else 'Late'
             message = f"Login successful for {user.name}."
 
+            # --- Persistence Layer (SQL via Background Task) ---
+            background_tasks.add_task(write_attendance_to_sql, user_id=uid, status=status, timestamp=now)
+
         elif action.lower() == 'logout':
-            existing_logout = db.query(Attendance).filter(
-                Attendance.user_id == uid,
-                func.date(Attendance.timestamp) == now.date(),
-                Attendance.status == 'Logout'
-            ).first()
+            # --- Live Layer (Redis) ---
+            redis.srem(live_set_key, uid)
 
-            if existing_logout:
-                return JSONResponse({'status': 'error', 'message': 'You have already logged out for today.'}, status_code=409)
-
+            # --- Persistence Layer (SQL via Background Task) ---
             status = 'Logout'
             message = f"Logout successful for {user.name}."
+            background_tasks.add_task(write_attendance_to_sql, user_id=uid, status=status, timestamp=now)
         
         else:
             return JSONResponse({'status': 'error', 'message': 'Invalid action specified'}, status_code=400)
-
-        new_record = Attendance(
-            user_id=uid,
-            status=status,
-            timestamp=now,
-            device_id=DEVICE_ID,
-        )
-        db.add(new_record)
-        db.commit()
 
         return JSONResponse({'status': 'success', 'message': message})
 
@@ -578,7 +618,7 @@ async def re_enroll(request: Request, staff_code: str = Form(...), db: Session =
 
 @app.post("/api/reset_faces/{user_id}")
 async def api_reset_faces(user_id: int):
-    if APP_ROLE != "LOCAL_KIOSK":
+    if settings.APP_ROLE != "LOCAL_KIOSK":
         return JSONResponse({'status': 'error', 'message': 'Reset not available'}, status_code=404)
     user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
     if os.path.exists(user_dir):
@@ -701,6 +741,24 @@ async def train_model_route(request: Request, background_tasks: BackgroundTasks)
     request.state.flash("Model retraining has been started in the background. It may take a few minutes to complete.", "info")
     return RedirectResponse(url="/admin", status_code=303)
 
+@app.get("/api/train")
+async def api_train_model(background_tasks: BackgroundTasks):
+    if not face_engine:
+        return JSONResponse({'status': 'error', 'message': 'Face engine not available'}, status_code=404)
+    
+    # For enrollment, we might want to wait for training to finish 
+    # OR run it in background. Kiosk usually wants to know when it's done.
+    # But since it takes a few seconds, background is safer for timeouts.
+    
+    def train_and_reload():
+        print("API: Starting model training...")
+        face_engine.train_model()
+        face_engine.reload_model()
+        print("API: Model reloaded.")
+
+    background_tasks.add_task(train_and_reload)
+    return JSONResponse({'status': 'success', 'message': 'Training started'})
+
 @app.get("/advanced_analytics", response_class=HTMLResponse)
 async def advanced_analytics(request: Request, db: Session = Depends(get_db)):
     users = db.query(User).order_by(User.name).all()
@@ -821,7 +879,7 @@ def _sync_sqlite_to_supabase_once():
 
 async def sync_worker_task():
     while True:
-        if APP_ROLE == "LOCAL_KIOSK":
+        if settings.APP_ROLE == "LOCAL_KIOSK":
             _sync_sqlite_to_supabase_once()
         await asyncio.sleep(30)
 
@@ -839,7 +897,7 @@ async def startup_event():
         try: conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'staff'"))
         except: pass
     
-    if APP_ROLE == "LOCAL_KIOSK":
+    if settings.APP_ROLE == "LOCAL_KIOSK":
         asyncio.create_task(scheduler_task())
         asyncio.create_task(sync_worker_task())
 
