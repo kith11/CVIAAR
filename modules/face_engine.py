@@ -38,6 +38,15 @@ class FaceEngine:
         self.face_scale_factor = 0.5  # downscale for mesh processing
         self.face_padding_ratio = 0.20
 
+    def reload_model(self):
+        if os.path.exists(self.model_path):
+            self.recognizer.read(self.model_path)
+            self.model_loaded = True
+            print("Face recognition model reloaded.")
+        else:
+            self.model_loaded = False
+            print("Model file not found, cannot reload.")
+
     def preprocess_face(self, face_img):
         """
         Standardize face image:

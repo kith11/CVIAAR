@@ -123,10 +123,14 @@ def _env_float(key: str, default: float) -> float:
     try: return float(raw)
     except: return default
 
-LBPH_DISTANCE_THRESHOLD = _env_float("LBPH_DISTANCE_THRESHOLD", 80.0)
+LBPH_DISTANCE_THRESHOLD = _env_float("LBPH_DISTANCE_THRESHOLD", 95.0)
+RECOGNITION_CACHE_TTL_SEC = _env_float("RECOGNITION_CACHE_TTL_SEC", 2.0)
 BLINK_EAR_THRESHOLD = _env_float("BLINK_EAR_THRESHOLD", 0.20)
 BLINK_MAX_CLOSED_SEC = _env_float("BLINK_MAX_CLOSED_SEC", 2.5)
 VERIFIED_TTL_SEC = _env_float("VERIFIED_TTL_SEC", 20.0)
+
+def get_now_pht():
+    return datetime.now(pytz.timezone('Asia/Manila'))
 
 # MJPEG Generator for video_feed
 def generate_frames():
@@ -301,17 +305,21 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
     
     data = await request.json()
     image_data = data.get('image')
-    if not image_data:
-        return JSONResponse({'status': 'error', 'message': 'No image provided'}, status_code=400)
-        
-    try:
-        if 'base64,' in image_data:
-            image_data = image_data.split('base64,')[1]
-        img_bytes = base64.b64decode(image_data)
-        nparr = np.frombuffer(img_bytes, np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    except Exception as e:
-        return JSONResponse({'status': 'error', 'message': f'Invalid image: {str(e)}'}, status_code=400)
+    
+    # Priority: 1. Base64 from frontend, 2. Camera fallback
+    if image_data:
+        try:
+            if 'base64,' in image_data:
+                image_data = image_data.split('base64,')[1]
+            img_bytes = base64.b64decode(image_data)
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        except Exception as e:
+            return JSONResponse({'status': 'error', 'message': f'Invalid image: {str(e)}'}, status_code=400)
+    elif camera:
+        frame = camera.get_frame()
+    else:
+        return JSONResponse({'status': 'error', 'message': 'No image source available'}, status_code=400)
 
     if frame is None:
         return JSONResponse({'status': 'error', 'message': 'Empty frame'}, status_code=400)
@@ -319,6 +327,12 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
     faces_data = face_engine.detect_faces_mesh(frame)
     now_ts = time.time()
     results = []
+    last_recognized_user = request.session.get('last_recognized', {'id': None, 'ts': 0})
+
+    # Clean up old entries from verified_live_users
+    for user_id in list(verified_live_users.keys()):
+        if now_ts - verified_live_users[user_id] > VERIFIED_TTL_SEC:
+            del verified_live_users[user_id]
 
     for ((x, y, w, h), landmarks) in faces_data:
         face_img = frame[y:y+h, x:x+w]
@@ -341,6 +355,9 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
                 result['user_id'] = user.id
                 recognized_faces[user.id] = now_ts
 
+                # Add confidence score to the result for debugging
+                result['confidence'] = distance
+
                 ear = face_engine.check_liveness(landmarks, frame.shape[1], frame.shape[0])
                 state = blink_state.get(user.id, {"closed": False, "changed_at": now_ts})
 
@@ -360,8 +377,26 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
                 last_verified = face_verification_cache.get(user.id, 0)
                 if now_ts - last_verified <= VERIFIED_TTL_SEC:
                     result["verified"] = True
+        else:
+            # Log unknown faces for debugging
+            # print(f"Unknown face detected. Label: {label}, Distance: {distance}")
+            if last_recognized_user['id'] and (now_ts - last_recognized_user['ts']) < RECOGNITION_CACHE_TTL_SEC:
+                cached_user = db.get(User, last_recognized_user['id'])
+                if cached_user:
+                    result['name'] = cached_user.name
+                    result['status'] = 'recognized'
+                    result['user_id'] = cached_user.id
+                    result['verified'] = True # Carry over verification
 
         results.append(result)
+    
+    # After processing all faces, update the session if a new user was recognized
+    if any(r['status'] == 'recognized' for r in results):
+        recognized_user = next(r for r in results if r['status'] == 'recognized')
+        request.session['last_recognized'] = {'id': recognized_user['user_id'], 'ts': now_ts}
+    elif not faces_data:
+        # If no faces are detected at all, clear the cache
+        request.session.pop('last_recognized', None)
 
     return JSONResponse({'status': 'success', 'faces': results})
 
@@ -465,7 +500,9 @@ async def delete_user(user_id: int, request: Request, db: Session = Depends(get_
         if os.path.exists(user_dir):
             shutil.rmtree(user_dir)
             
-        face_engine.train_model()
+        if face_engine:
+            face_engine.train_model()
+            face_engine.reload_model()
         request.state.flash(f"User {user.name} deleted.", "success")
     else:
         request.state.flash("User not found.", "danger")
@@ -499,12 +536,21 @@ async def analytics_route(request: Request, db: Session = Depends(get_db)):
         absences = db.query(Attendance).filter(Attendance.user_id == user.id, Attendance.status == 'Absent').count()
         stats.append({
             'id': user.id,
+            'staff_code': user.staff_code,
             'name': user.name,
+            'employment_type': user.employment_type,
             'present': presents,
             'tardy': tardies,
             'absent': absences
         })
-    return JSONResponse({'stats': stats})
+    
+    # Add trends data for the D3 chart
+    trends = engine.get_weekly_trends()
+    
+    return JSONResponse({
+        'stats': stats,
+        'trends': trends
+    })
 
 @app.post("/add_user_by_id")
 async def add_user_by_id(request: Request, user_id: int = Form(...), db: Session = Depends(get_db)):
@@ -637,6 +683,23 @@ async def generate_report(request: Request, user_id: int = Form(...), month: int
         days_data.append({'day': d, 'am_in': am_in, 'am_out': am_out, 'pm_in': pm_in, 'pm_out': pm_out, 'ot_in': '', 'ot_out': ''})
 
     return render_template(request, "report.html", {"user": user, "days": days_data, "month_name": month_name, "year": year})
+
+@app.get("/train")
+async def train_model_route(request: Request, background_tasks: BackgroundTasks):
+    if not request.session.get("logged_in") or request.session.get("role") != "admin":
+        return RedirectResponse(url="/login")
+
+    def train_and_reload():
+        if face_engine:
+            print("Starting model training...")
+            face_engine.train_model()
+            print("Training complete. Reloading model...")
+            face_engine.reload_model()
+            print("Model reloaded.")
+
+    background_tasks.add_task(train_and_reload)
+    request.state.flash("Model retraining has been started in the background. It may take a few minutes to complete.", "info")
+    return RedirectResponse(url="/admin", status_code=303)
 
 @app.get("/advanced_analytics", response_class=HTMLResponse)
 async def advanced_analytics(request: Request, db: Session = Depends(get_db)):
