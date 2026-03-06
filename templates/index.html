@@ -36,20 +36,31 @@
                 </div>
                 
                 <div id="status-overlay" class="position-absolute bottom-0 start-0 w-100 p-3 p-md-4 bg-dark bg-opacity-50 backdrop-blur" style="backdrop-filter: blur(10px);">
-                    <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
-                        <div class="d-flex align-items-center">
-                            <div class="spinner-grow spinner-grow-sm text-white me-2 me-md-3" role="status"></div>
-                            <h5 class="mb-0 fw-bold text-white" id="status-message" style="font-size: 0.9rem; line-height: 1.2;">Initializing system...</h5>
-                        </div>
-                        <div id="attendance-actions" class="d-none">
-                            <div class="text-end small text-white-50 mb-1" id="attendance-name"></div>
-                            <div class="btn-group">
-                                <button id="btn-login" type="button" class="btn btn-success btn-sm fw-bold">Log in</button>
-                                <button id="btn-logout" type="button" class="btn btn-outline-light btn-sm fw-bold">Log out</button>
-                            </div>
-                            <div class="small text-warning mt-1 d-none" id="attendance-message"></div>
-                        </div>
+                    <div class="d-flex align-items-center">
+                        <div class="spinner-grow spinner-grow-sm text-white me-2 me-md-3" role="status"></div>
+                        <h5 class="mb-0 fw-bold text-white" id="status-message" style="font-size: 0.9rem; line-height: 1.2;">Initializing system...</h5>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Attendance Controls (Below Feed) -->
+        <div id="attendance-actions" class="card mt-4 p-4 d-none border-0 shadow-sm" style="background: #f8f9fa; border-left: 5px solid var(--accent) !important;">
+            <div class="d-flex flex-column flex-md-row align-items-center justify-content-between gap-4">
+                <div class="text-center text-md-start">
+                    <div class="text-muted smaller text-uppercase fw-bold mb-1" style="letter-spacing: 0.1em;">Identity Verified</div>
+                    <h3 class="mb-0 fw-bold text-dark" id="attendance-name">---</h3>
+                </div>
+                <div class="text-center">
+                    <div class="btn-group btn-group-lg shadow-sm">
+                        <button id="btn-login" type="button" class="btn btn-primary px-5 fw-bold" style="background: #28a745; border-color: #28a745;">
+                            <i class="bi bi-box-arrow-in-right me-2"></i>Log in
+                        </button>
+                        <button id="btn-logout" type="button" class="btn btn-outline-dark px-5 fw-bold">
+                            <i class="bi bi-box-arrow-right me-2"></i>Log out
+                        </button>
+                    </div>
+                    <div class="small text-warning mt-2 d-none fw-bold" id="attendance-message"></div>
                 </div>
             </div>
         </div>
@@ -84,20 +95,28 @@
 
 <!-- Retrain Modal -->
 <div class="modal fade" id="retrainModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-sm modal-dialog-centered">
+    <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 p-4">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h5 class="fw-bold mb-0">Retrain Identity</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             
-            <p class="text-muted small mb-4">Enter your 6-digit Staff ID to reset your face model and start re-capturing.</p>
+            <p class="text-muted small mb-4">Select your name from the list to reset your face model and start re-capturing.</p>
             
             <form action="/re_enroll" method="POST">
                 <div class="mb-4">
-                    <input type="text" name="staff_code" class="form-control text-center py-3 fs-4" required placeholder="e.g. 123456" minlength="6" maxlength="6" pattern="\d{6}">
+                    <label class="form-label small fw-bold text-uppercase text-muted">Select User</label>
+                    <select name="staff_code" class="form-select form-select-lg" required>
+                        <option value="" disabled selected>Choose your name...</option>
+                        {% for user in users %}
+                        <option value="{{ user.staff_code }}">{{ user.name }} ({{ user.staff_code }})</option>
+                        {% endfor %}
+                    </select>
                 </div>
-                <button type="submit" class="btn btn-primary w-100 py-3 fw-bold">START RE-CAPTURE</button>
+                <button type="submit" class="btn btn-primary w-100 py-3 fw-bold">
+                    <i class="bi bi-camera-fill me-2"></i>START RE-CAPTURE
+                </button>
             </form>
         </div>
     </div>
