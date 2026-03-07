@@ -32,6 +32,7 @@ class Attendance(Base):
     status = Column(String(20), nullable=False)
     notes = Column(String(200), nullable=True)
     device_id = Column(String(50), nullable=True)
+    synced = Column(Integer, default=0) # 0: pending, 1: synced
     synced_at = Column(DateTime, nullable=True)
     user = relationship("User", back_populates="attendances")
 

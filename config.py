@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     # Database URLs
     SQLITE_DB_PATH: str = "data/offline/cviaar_local.sqlite3"
     DATABASE_URL: str | None = None # For Supabase/Postgres
+    SUPABASE_URL: str | None = None
+    SUPABASE_KEY: str | None = None
 
     # Upstash Redis for Live Layer
     UPSTASH_REDIS_URL: str

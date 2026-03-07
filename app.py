@@ -31,6 +31,7 @@ from config import settings
 from modules.models import Base, User, Attendance, AttendanceEdit, ExcuseNote
 from modules.camera import Camera
 from modules.face_engine import FaceEngine
+from modules.sync_engine import SyncEngine
 from modules.analytics_engine import AnalyticsEngine
 
 app = FastAPI(title="CVIAAR Attendance System")
@@ -110,16 +111,25 @@ def get_redis():
         raise HTTPException(status_code=503, detail="Redis is not configured or available.")
     return redis
 
-# Camera and Face Engine
+# Camera, Face Engine and Sync Engine
 if settings.APP_ROLE == "LOCAL_KIOSK":
     camera = Camera()
     face_engine = FaceEngine(
         model_path=os.path.join(basedir, "data", "lbph_model.yml"),
         faces_dir=os.path.join(basedir, "data", "faces"),
     )
+    sync_engine = SyncEngine(
+        database_url=local_sqlite_url,
+        supabase_url=settings.SUPABASE_URL or "",
+        supabase_key=settings.SUPABASE_KEY or "",
+        sync_interval=30,
+        device_id=settings.DEVICE_ID
+    )
+    sync_engine.start_sync_worker()
 else:
     camera = None
     face_engine = None
+    sync_engine = None
 
 # Global state
 attendance_cache = {}
@@ -322,7 +332,6 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
     data = await request.json()
     image_data = data.get('image')
     
-    # Priority: 1. Base64 from frontend, 2. Camera fallback
     if image_data:
         try:
             if 'base64,' in image_data:
@@ -340,17 +349,13 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
     if frame is None:
         return JSONResponse({'status': 'error', 'message': 'Empty frame'}, status_code=400)
 
-    faces_data = face_engine.detect_faces_mesh(frame)
+    # Use consolidated FaceEngine.process_frame
+    face_results = face_engine.process_frame(frame)
     now_ts = time.time()
     results = []
-    last_recognized_user = request.session.get('last_recognized', {'id': None, 'ts': 0})
-
-    # Clean up old entries from verified_live_users
-    for user_id in list(verified_live_users.keys()):
-        if now_ts - verified_live_users[user_id] > VERIFIED_TTL_SEC:
-            del verified_live_users[user_id]
-
-    for ((x, y, w, h), landmarks) in faces_data:
+    
+    for res in face_results:
+        x, y, w, h = res.bbox
         face_img = frame[y:y+h, x:x+w]
         gray_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
         label, distance = face_engine.recognize_face(gray_face)
@@ -361,6 +366,7 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
             'status': 'unknown',
             'verified': False,
             'user_id': None,
+            'liveness_detected': res.is_real_face
         }
 
         if label != -1 and distance < LBPH_DISTANCE_THRESHOLD:
@@ -369,53 +375,13 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
                 result['name'] = user.name
                 result['status'] = 'recognized'
                 result['user_id'] = user.id
-                recognized_faces[user.id] = now_ts
-
-                # Add confidence score to the result for debugging
                 result['confidence'] = distance
-
-                ear = face_engine.check_liveness(landmarks, frame.shape[1], frame.shape[0])
-                state = blink_state.get(user.id, {"closed": False, "changed_at": now_ts})
-
-                if ear < BLINK_EAR_THRESHOLD:
-                    if not state["closed"]:
-                        state = {"closed": True, "changed_at": now_ts}
-                else:
-                    if state["closed"]:
-                        closed_for = now_ts - state["changed_at"]
-                        if 0.05 <= closed_for <= BLINK_MAX_CLOSED_SEC:
-                            verified_live_users[user.id] = now_ts
-                            face_verification_cache[user.id] = now_ts
-                            result["liveness_detected"] = True
-                        state = {"closed": False, "changed_at": now_ts}
-
-                blink_state[user.id] = state
-                last_verified = face_verification_cache.get(user.id, 0)
-                if now_ts - last_verified <= VERIFIED_TTL_SEC:
+                
+                if res.is_real_face:
+                    face_verification_cache[user.id] = now_ts
                     result["verified"] = True
-        else:
-            # Log unknown faces for debugging
-            # print(f"Unknown face detected. Label: {label}, Distance: {distance}")
-            if last_recognized_user['id'] and (now_ts - last_recognized_user['ts']) < RECOGNITION_CACHE_TTL_SEC:
-                cached_user = db.get(User, last_recognized_user['id'])
-                if cached_user:
-                    result['name'] = cached_user.name
-                    result['status'] = 'recognized'
-                    result['user_id'] = cached_user.id
-                    # Check if this user was already verified recently
-                    last_verified = face_verification_cache.get(cached_user.id, 0)
-                    if now_ts - last_verified <= VERIFIED_TTL_SEC:
-                        result["verified"] = True
-
+        
         results.append(result)
-    
-    # After processing all faces, update the session if a new user was recognized
-    if any(r['status'] == 'recognized' for r in results):
-        recognized_user = next(r for r in results if r['status'] == 'recognized')
-        request.session['last_recognized'] = {'id': recognized_user['user_id'], 'ts': now_ts}
-    elif not faces_data:
-        # If no faces are detected at all, clear the cache
-        request.session.pop('last_recognized', None)
 
     return JSONResponse({'status': 'success', 'faces': results})
 
@@ -436,25 +402,8 @@ async def api_live_status(redis: Redis = Depends(get_redis)):
         print(f"Could not fetch live status from Redis: {e}")
         raise HTTPException(status_code=503, detail="Live data is currently unavailable.")
 
-def write_attendance_to_sql(user_id: int, status: str, timestamp: datetime):
-    db = SessionLocal()
-    try:
-        new_record = Attendance(
-            user_id=user_id,
-            status=status,
-            timestamp=timestamp,
-            device_id=settings.DEVICE_ID,
-        )
-        db.add(new_record)
-        db.commit()
-        print(f"Successfully wrote attendance for user {user_id} to SQL.")
-    except Exception as e:
-        print(f"Error writing attendance to SQL for user {user_id}: {e}")
-    finally:
-        db.close()
-
 @app.post("/api/attendance/record")
-async def api_attendance_record(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), redis: Redis = Depends(get_redis)):
+async def api_attendance_record(request: Request, db: Session = Depends(get_db), redis: Redis = Depends(get_redis)):
     try:
         if settings.APP_ROLE != "LOCAL_KIOSK":
             return JSONResponse({'status': 'error', 'message': 'Recording not available on this service'}, status_code=404)
@@ -466,63 +415,52 @@ async def api_attendance_record(request: Request, background_tasks: BackgroundTa
         if not all([user_id, action]):
             return JSONResponse({'status': 'error', 'message': 'Missing user_id or action'}, status_code=400)
 
-        try:
-            uid = int(user_id)
-        except (ValueError, TypeError):
-            return JSONResponse({'status': 'error', 'message': 'Invalid user_id format'}, status_code=400)
-
+        uid = int(user_id)
         user = db.get(User, uid)
         if not user:
             return JSONResponse({'status': 'error', 'message': 'User not found'}, status_code=404)
 
-        # --- Security Check: Liveness (Blink) Verification ---
+        # Security Check: Liveness Verification
         now_ts = time.time()
         last_verified = face_verification_cache.get(uid, 0)
         if now_ts - last_verified > VERIFIED_TTL_SEC:
-            return JSONResponse({'status': 'error', 'message': 'Liveness verification required. Please blink at the camera.'}, status_code=403)
+            return JSONResponse({'status': 'error', 'message': 'Liveness verification required. Please look at the camera.'}, status_code=403)
 
         now = get_now_pht()
         today_str = now.strftime("%Y-%m-%d")
         live_set_key = f"attendance:{today_str}:present"
         
         if action.lower() == 'login':
-            # --- Live Layer (Redis) ---
             if redis.sismember(live_set_key, uid):
-                return JSONResponse({'status': 'error', 'message': 'You are already logged in for today.'}, status_code=409)
+                return JSONResponse({'status': 'error', 'message': 'Already logged in.'}, status_code=409)
             
             redis.sadd(live_set_key, uid)
-
-            # --- Determine Status ---
+            
             sch_start_str = user.schedule_start or "06:00"
             try:
                 sch_start_dt = now.replace(hour=int(sch_start_str[:2]), minute=int(sch_start_str[3:]), second=0, microsecond=0)
-            except ValueError:
-                sch_start_dt = now.replace(hour=6, minute=0, second=0, microsecond=0)
+            except:
+                sch_start_dt = now.replace(hour=6, minute=0)
 
-            on_time_end = sch_start_dt + timedelta(minutes=15)
-            status = 'On Time' if now <= on_time_end else 'Late'
+            status = 'On Time' if now <= sch_start_dt + timedelta(minutes=15) else 'Late'
+            
+            # Record via SyncEngine (Producer)
+            sync_engine.record_attendance(user_id=uid, status=status)
             message = f"Login successful for {user.name}."
 
-            # --- Persistence Layer (SQL via Background Task) ---
-            background_tasks.add_task(write_attendance_to_sql, user_id=uid, status=status, timestamp=now)
-
         elif action.lower() == 'logout':
-            # --- Live Layer (Redis) ---
             redis.srem(live_set_key, uid)
-
-            # --- Persistence Layer (SQL via Background Task) ---
-            status = 'Logout'
+            sync_engine.record_attendance(user_id=uid, status='Logout')
             message = f"Logout successful for {user.name}."
-            background_tasks.add_task(write_attendance_to_sql, user_id=uid, status=status, timestamp=now)
         
         else:
-            return JSONResponse({'status': 'error', 'message': 'Invalid action specified'}, status_code=400)
+            return JSONResponse({'status': 'error', 'message': 'Invalid action'}, status_code=400)
 
         return JSONResponse({'status': 'success', 'message': message})
 
     except Exception as e:
         traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': 'Internal Server Error'}, status_code=500)
+        return JSONResponse({'status': 'error', 'message': str(e)}, status_code=500)
 
 @app.post("/delete_user/{user_id}")
 async def delete_user(user_id: int, request: Request, db: Session = Depends(get_db)):
@@ -857,39 +795,10 @@ async def scheduler_task():
     while True:
         try:
             now = get_now_pht()
-            # Implement auto_logout and reports logic here...
+            # Implement auto_logout logic here...
             await asyncio.sleep(60)
         except Exception:
             await asyncio.sleep(60)
-
-# Supabase Sync Logic from app.py
-def _db_url_reachable(url: str) -> bool:
-    try:
-        engine = create_engine(url, pool_pre_ping=True)
-        with engine.connect() as conn: conn.execute(text("SELECT 1"))
-        engine.dispose()
-        return True
-    except: return False
-
-def _sync_sqlite_to_supabase_once():
-    supabase_db_url = (os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL", "")).strip()
-    if not supabase_db_url or not _db_url_reachable(supabase_db_url): return
-    # Sync logic implementation...
-    pass
-
-async def sync_worker_task():
-    while True:
-        if settings.APP_ROLE == "LOCAL_KIOSK":
-            _sync_sqlite_to_supabase_once()
-        await asyncio.sleep(30)
-
-# Email Reporting Logic from app.py
-def send_analytical_email(user, logs, is_early=False):
-    if not user.email: return False, "No email."
-    try:
-        # Implementation from app.py...
-        return True, "Success"
-    except Exception as e: return False, str(e)
 
 @app.on_event("startup")
 async def startup_event():
@@ -899,7 +808,6 @@ async def startup_event():
     
     if settings.APP_ROLE == "LOCAL_KIOSK":
         asyncio.create_task(scheduler_task())
-        asyncio.create_task(sync_worker_task())
 
 if __name__ == "__main__":
     import uvicorn
