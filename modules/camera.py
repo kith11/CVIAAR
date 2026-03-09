@@ -1,14 +1,15 @@
 import cv2
 import time
 import threading
+from config import settings
 
 class Camera:
     def __init__(self, source=0):
         try:
             self.video = cv2.VideoCapture(source)
-            self.video.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-            self.video.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-            self.video.set(cv2.CAP_PROP_FPS, 15)
+            self.video.set(cv2.CAP_PROP_FRAME_WIDTH, settings.CAMERA_WIDTH)
+            self.video.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.CAMERA_HEIGHT)
+            self.video.set(cv2.CAP_PROP_FPS, settings.CAMERA_FPS)
         except Exception as e:
             print(f"Warning: Could not initialize camera: {e}")
             self.video = None
