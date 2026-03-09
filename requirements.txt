@@ -4,7 +4,6 @@ jinja2
 python-multipart
 itsdangerous
 starlette
-opencv-python-headless
 numpy
 pandas
 SQLAlchemy
@@ -13,6 +12,10 @@ python-dotenv
 openai
 pytz
 mediapipe==0.10.9
+requests
+opencv-contrib-python-headless
 Pillow
 upstash-redis
 pydantic-settings
+pywebview
+waitress

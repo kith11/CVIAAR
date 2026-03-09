@@ -7,8 +7,9 @@ REPO_DIR="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$REPO_DIR"
 
 # Fix ownership of Docker-created files so git can modify them
-if [[ -d "$REPO_DIR/data/offline" ]]; then
-    sudo chown -R "${SUDO_USER:-$USER}:${SUDO_GID:-$(id -gn)}" "$REPO_DIR/data/offline" 2>/dev/null || true
+# Use sudo -n to avoid interactive password prompt
+if [[ -d "$REPO_DIR/data" ]]; then
+    sudo -n chown -R "${SUDO_USER:-$USER}:${SUDO_GID:-$(id -gn)}" "$REPO_DIR/data" 2>/dev/null || true
 fi
 
 git fetch origin

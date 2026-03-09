@@ -34,6 +34,14 @@ from modules.face_engine import FaceEngine
 from modules.sync_engine import SyncEngine
 from modules.analytics_engine import AnalyticsEngine
 
+import logging
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("websockets").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("modules.sync_engine").setLevel(logging.INFO)
+
 app = FastAPI(title="CVIAAR Attendance System")
 
 # Session management
@@ -147,11 +155,11 @@ def _env_float(key: str, default: float) -> float:
     try: return float(raw)
     except: return default
 
-LBPH_DISTANCE_THRESHOLD = _env_float("LBPH_DISTANCE_THRESHOLD", 95.0)
-RECOGNITION_CACHE_TTL_SEC = _env_float("RECOGNITION_CACHE_TTL_SEC", 2.0)
+LBPH_DISTANCE_THRESHOLD = _env_float("LBPH_DISTANCE_THRESHOLD", 80.0)
+RECOGNITION_CACHE_TTL_SEC = _env_float("RECOGNITION_CACHE_TTL_SEC", 3.0)
 BLINK_EAR_THRESHOLD = _env_float("BLINK_EAR_THRESHOLD", 0.25)
 BLINK_MAX_CLOSED_SEC = _env_float("BLINK_MAX_CLOSED_SEC", 2.5)
-VERIFIED_TTL_SEC = _env_float("VERIFIED_TTL_SEC", 20.0)
+VERIFIED_TTL_SEC = _env_float("VERIFIED_TTL_SEC", 30.0)
 
 def get_now_pht():
     return datetime.now(pytz.timezone('Asia/Manila'))
@@ -279,7 +287,7 @@ async def enroll_page(request: Request, user_id: int, db: Session = Depends(get_
     if not user:
         request.state.flash("User not found!", "danger")
         return RedirectResponse(url="/admin", status_code=303)
-    return render_template(request, "enroll.html", {"user": user})
+    return render_template(request, "enroll.html", {"user": user, "re_enroll": False})
 
 @app.post("/api/capture/{user_id}")
 async def api_capture(user_id: int, request: Request, db: Session = Depends(get_db)):
@@ -312,10 +320,13 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
     if frame is None:
         return JSONResponse({'status': 'error', 'message': 'Camera/Image error'}, status_code=500)
 
-    faces = face_engine.detect_faces(frame)
-    if faces:
-        faces = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)
-        (x, y, w, h) = faces[0]
+    # Use consolidated FaceEngine.detect_faces (ignores rate limiting for enrollment)
+    face_results = face_engine.detect_faces(frame)
+    if face_results:
+        # Sort by bbox size to get the most prominent face
+        face_results = sorted(face_results, key=lambda f: f.bbox[2] * f.bbox[3], reverse=True)
+        res = face_results[0]
+        (x, y, w, h) = res.bbox
         face_img = frame[y:y+h, x:x+w]
         gray_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
         filename = f"{existing + 1}.jpg"
@@ -356,9 +367,13 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
     
     for res in face_results:
         x, y, w, h = res.bbox
-        face_img = frame[y:y+h, x:x+w]
-        gray_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-        label, distance = face_engine.recognize_face(gray_face)
+        # Add padding to face crop for better recognition
+        pad = int(w * 0.1)
+        y1, y2 = max(0, y-pad), min(frame.shape[0], y+h+pad)
+        x1, x2 = max(0, x-pad), min(frame.shape[1], x+w+pad)
+        face_img = frame[y1:y2, x1:x2]
+        
+        label, distance = face_engine.recognize_face(face_img)
 
         result = {
             'rect': [int(x), int(y), int(w), int(h)],
@@ -366,8 +381,11 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
             'status': 'unknown',
             'verified': False,
             'user_id': None,
-            'liveness_detected': res.is_real_face
+            'blink_detected': res.blink_detected
         }
+        
+        # Debug logging for blink detection
+        print(f"DEBUG: Face detection - blink_detected: {res.blink_detected}, bbox: {res.bbox}")
 
         if label != -1 and distance < LBPH_DISTANCE_THRESHOLD:
             user = db.get(User, label)
@@ -377,13 +395,37 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
                 result['user_id'] = user.id
                 result['confidence'] = distance
                 
-                if res.is_real_face:
+                # Restore Blink-based verification logic
+                is_currently_verified = face_verification_cache.get(user.id, 0) > (now_ts - VERIFIED_TTL_SEC)
+                
+                if res.blink_detected:
                     face_verification_cache[user.id] = now_ts
                     result["verified"] = True
+                elif is_currently_verified:
+                    result["verified"] = True
+                else:
+                    result["verified"] = False
+        else:
+            # If recognition fails, clear any possibly stale cache
+            if label != -1 and label in recognized_faces:
+                del recognized_faces[label]
         
         results.append(result)
 
     return JSONResponse({'status': 'success', 'faces': results})
+
+@app.get("/api/recent_logs")
+async def api_recent_logs(db: Session = Depends(get_db)):
+    logs = db.query(Attendance).order_by(Attendance.timestamp.desc()).limit(10).all()
+    results = []
+    for log in logs:
+        results.append({
+            "name": log.user.name,
+            "time": log.timestamp.strftime("%I:%M %p"),
+            "status": log.status,
+            "color": "success" if log.status == "On Time" else ("warning" if log.status == "Late" else "secondary")
+        })
+    return JSONResponse(results)
 
 @app.get("/api/scan_status")
 async def api_scan_status():
@@ -481,334 +523,30 @@ async def delete_user(user_id: int, request: Request, db: Session = Depends(get_
         if face_engine:
             face_engine.train_model()
             face_engine.reload_model()
-        request.state.flash(f"User {user.name} deleted.", "success")
+            
+        request.state.flash(f"User {user.name} has been deleted.", "success")
     else:
         request.state.flash("User not found.", "danger")
-    return RedirectResponse(url="/admin", status_code=303)
-
-@app.post("/edit_user/{user_id}")
-async def edit_user(user_id: int, request: Request, name: str = Form(...), schedule_start: str = Form(None), schedule_end: str = Form(None), employment_type: str = Form(None), db: Session = Depends(get_db)):
-    user = db.get(User, user_id)
-    if user and name:
-        user.name = name
-        if schedule_start: user.schedule_start = schedule_start
-        if schedule_end: user.schedule_end = schedule_end
-        if employment_type: user.employment_type = employment_type
-        db.commit()
-        request.state.flash(f"User updated to {name}.", "success")
-    else:
-        request.state.flash("Invalid request.", "danger")
-    return RedirectResponse(url="/admin", status_code=303)
-
-@app.get("/analytics")
-async def analytics_route(request: Request, db: Session = Depends(get_db)):
-    if not request.session.get("logged_in") or request.session.get("role") != "admin":
-        return RedirectResponse(url="/login")
         
-    engine = AnalyticsEngine(db)
-    stats = []
-    users = db.query(User).all()
-    for user in users:
-        presents = db.query(Attendance).filter(Attendance.user_id == user.id, Attendance.status.in_(['Present', 'On Time'])).count()
-        tardies = db.query(Attendance).filter(Attendance.user_id == user.id, Attendance.status.in_(['Tardy', 'Late'])).count()
-        absences = db.query(Attendance).filter(Attendance.user_id == user.id, Attendance.status == 'Absent').count()
-        stats.append({
-            'id': user.id,
-            'staff_code': user.staff_code,
-            'name': user.name,
-            'employment_type': user.employment_type,
-            'present': presents,
-            'tardy': tardies,
-            'absent': absences
-        })
-    
-    # Add trends data for the D3 chart
-    trends = engine.get_weekly_trends()
-    
-    return JSONResponse({
-        'stats': stats,
-        'trends': trends
-    })
+    return RedirectResponse(url="/admin", status_code=303)
 
-@app.post("/add_user_by_id")
-async def add_user_by_id(request: Request, user_id: int = Form(...), db: Session = Depends(get_db)):
-    existing = db.get(User, user_id)
-    if existing:
-        request.state.flash("User ID already exists", "danger")
-        return RedirectResponse(url="/admin", status_code=303)
-    
-    staff_code = f"{random.randint(0, 999999):06d}"
-    new_user = User(id=user_id, name=f'User {user_id}', staff_code=staff_code)
-    db.add(new_user)
-    db.commit()
-    
-    user_dir = os.path.join(basedir, 'data', 'faces', str(new_user.id))
-    os.makedirs(user_dir, exist_ok=True)
-    return RedirectResponse(url=f"/enroll/{new_user.id}", status_code=303)
-
-@app.post("/re_enroll", response_class=HTMLResponse)
-async def re_enroll(request: Request, staff_code: str = Form(...), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.staff_code == staff_code).first()
-    if user:
-        return render_template(request, "enroll.html", {"user": user, "re_enroll": True})
-    request.state.flash("Staff ID not found.", "danger")
-    return RedirectResponse(url="/", status_code=303)
-
-@app.post("/api/reset_faces/{user_id}")
-async def api_reset_faces(user_id: int):
-    if settings.APP_ROLE != "LOCAL_KIOSK":
-        return JSONResponse({'status': 'error', 'message': 'Reset not available'}, status_code=404)
-    user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
-    if os.path.exists(user_dir):
-        for f in os.listdir(user_dir):
-            if f.endswith('.jpg'): os.remove(os.path.join(user_dir, f))
-    else:
-        os.makedirs(user_dir, exist_ok=True)
-    return JSONResponse({'status': 'success'})
-
-@app.get("/audit_logs", response_class=HTMLResponse)
-async def audit_logs(request: Request, db: Session = Depends(get_db)):
+@app.post("/retrain")
+async def retrain_model(request: Request, background_tasks: BackgroundTasks):
     if not request.session.get("logged_in"):
         return RedirectResponse(url="/login")
-    edits = db.query(AttendanceEdit, Attendance, User).join(
-        Attendance, AttendanceEdit.attendance_id == Attendance.id
-    ).join(
-        User, Attendance.user_id == User.id
-    ).order_by(AttendanceEdit.edited_at.desc()).limit(100).all()
-    return render_template(request, "audit_logs.html", {"edits": edits})
-
-@app.post("/request_early_report")
-async def request_early_report(request: Request, staff_code: str = Form(...), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.staff_code == staff_code).first()
-    if not user:
-        request.state.flash("Staff ID not found.", "danger")
-        return RedirectResponse(url="/staff_portal", status_code=303)
         
-    if not user.email:
-        request.state.flash("No email address associated with your account.", "warning")
-        return RedirectResponse(url="/staff_portal", status_code=303)
+    if face_engine:
+        request.state.flash("Model retraining has been initiated. This may take a few minutes.", "info")
+        background_tasks.add_task(face_engine.train_model)
+    else:
+        request.state.flash("Face engine not available.", "danger")
         
-    # Logic for sending email (using send_analytical_email from app.py)
-    # For now, just a placeholder
-    request.state.flash(f"Early analytical report request received for {user.email}.", "success")
-    return RedirectResponse(url="/staff_portal", status_code=303)
-
-@app.get("/export_attendance_csv")
-async def export_attendance_csv(db: Session = Depends(get_db)):
-    import csv
-    import io
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(['ID', 'Name', 'Timestamp', 'Status', 'Notes'])
-    logs = db.query(Attendance, User).join(User, Attendance.user_id == User.id).order_by(Attendance.timestamp.desc()).all()
-    for log, user in logs:
-        writer.writerow([log.id, user.name, log.timestamp.strftime('%Y-%m-%d %H:%M:%S'), log.status, log.notes or ''])
-    
-    return Response(
-        content=output.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=attendance_export_{get_now_pht().strftime('%Y%m%d')}.csv"}
-    )
-
-@app.get("/generate_report_form/{user_id}", response_class=HTMLResponse)
-async def generate_report_form(user_id: int, request: Request, db: Session = Depends(get_db)):
-    user = db.get(User, user_id)
-    if not user:
-        request.state.flash("User not found", "danger")
-        return RedirectResponse(url="/admin", status_code=303)
-    return render_template(request, "report_form.html", {"user": user, "current_month": get_now_pht().month})
-
-@app.post("/generate_report")
-async def generate_report(request: Request, user_id: int = Form(...), month: int = Form(...), year: int = Form(...), db: Session = Depends(get_db)):
-    user = db.get(User, user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    import calendar
-    num_days = calendar.monthrange(year, month)[1]
-    month_name = calendar.month_name[month]
-    
-    start_date = datetime(year, month, 1)
-    end_date = datetime(year, month + 1, 1) if month < 12 else datetime(year + 1, 1, 1)
-        
-    logs = db.query(Attendance).filter(
-        Attendance.user_id == user.id,
-        Attendance.timestamp >= start_date,
-        Attendance.timestamp < end_date
-    ).order_by(Attendance.timestamp).all()
-    
-    logs_by_day = {}
-    for log in logs:
-        d = log.timestamp.day
-        if d not in logs_by_day: logs_by_day[d] = []
-        logs_by_day[d].append(log)
-        
-    days_data = []
-    for d in range(1, num_days + 1):
-        day_logs = logs_by_day.get(d, [])
-        am_in = am_out = pm_in = pm_out = ""
-        for log in day_logs:
-            t_str = log.timestamp.strftime("%I:%M %p")
-            if log.status in ['Present', 'Tardy', 'On Time', 'Late']:
-                if log.timestamp.hour < 12:
-                    if not am_in: am_in = t_str
-                else:
-                    if not pm_in: pm_in = t_str
-            elif log.status == 'Logout':
-                if log.timestamp.hour >= 12: pm_out = t_str
-                else: am_out = t_str
-        
-        days_data.append({'day': d, 'am_in': am_in, 'am_out': am_out, 'pm_in': pm_in, 'pm_out': pm_out, 'ot_in': '', 'ot_out': ''})
-
-    return render_template(request, "report.html", {"user": user, "days": days_data, "month_name": month_name, "year": year})
-
-@app.get("/train")
-async def train_model_route(request: Request, background_tasks: BackgroundTasks):
-    if not request.session.get("logged_in") or request.session.get("role") != "admin":
-        return RedirectResponse(url="/login")
-
-    def train_and_reload():
-        if face_engine:
-            print("Starting model training...")
-            face_engine.train_model()
-            print("Training complete. Reloading model...")
-            face_engine.reload_model()
-            print("Model reloaded.")
-
-    background_tasks.add_task(train_and_reload)
-    request.state.flash("Model retraining has been started in the background. It may take a few minutes to complete.", "info")
     return RedirectResponse(url="/admin", status_code=303)
 
-@app.get("/api/train")
+@app.post("/api/train")
 async def api_train_model(background_tasks: BackgroundTasks):
-    if not face_engine:
-        return JSONResponse({'status': 'error', 'message': 'Face engine not available'}, status_code=404)
-    
-    # For enrollment, we might want to wait for training to finish 
-    # OR run it in background. Kiosk usually wants to know when it's done.
-    # But since it takes a few seconds, background is safer for timeouts.
-    
-    def train_and_reload():
-        print("API: Starting model training...")
-        face_engine.train_model()
-        face_engine.reload_model()
-        print("API: Model reloaded.")
-
-    background_tasks.add_task(train_and_reload)
-    return JSONResponse({'status': 'success', 'message': 'Training started'})
-
-@app.get("/advanced_analytics", response_class=HTMLResponse)
-async def advanced_analytics(request: Request, db: Session = Depends(get_db)):
-    users = db.query(User).order_by(User.name).all()
-    return render_template(request, "analytics.html", {"users": users})
-
-@app.get("/api/advanced_analytics_data")
-async def advanced_analytics_data(request: Request, db: Session = Depends(get_db)):
-    engine = AnalyticsEngine(db)
-    start_str = request.query_params.get('start_date')
-    end_str = request.query_params.get('end_date')
-    employment_type = request.query_params.get('employment_type')
-    user_id = request.query_params.get('user_id')
-    
-    start_date = datetime.strptime(start_str, '%Y-%m-%d') if start_str else None
-    end_date = datetime.strptime(end_str, '%Y-%m-%d') if end_str else None
-            
-    return JSONResponse({
-        'weekly_trends': engine.get_weekly_trends(start_date, end_date, employment_type, user_id),
-        'monthly_trends': engine.get_monthly_trends(start_date, end_date, employment_type, user_id),
-        'peak_arrival': engine.get_peak_arrival_times(start_date, end_date, employment_type, user_id),
-        'status_distribution': engine.get_status_distribution(start_date, end_date, employment_type, user_id),
-        'risk_users': engine.predict_risk_users()
-    })
-
-@app.get("/api/recent_logs")
-async def api_recent_logs(db: Session = Depends(get_db)):
-    try:
-        logs = db.query(Attendance, User).outerjoin(User, Attendance.user_id == User.id).order_by(Attendance.timestamp.desc()).limit(10).all()
-        data = []
-        for log, user in logs:
-            color = 'success'
-            if log.status == 'Tardy': color = 'warning'
-            elif log.status == 'Absent': color = 'danger'
-            elif log.status == 'Logout': color = 'secondary'
-            
-            data.append({
-                'name': user.name if user else f'ID {log.user_id}',
-                'status': log.status,
-                'time': log.timestamp.strftime('%I:%M %p'),
-                'color': color
-            })
-        return JSONResponse(data)
-    except:
-        return JSONResponse([])
-
-@app.post("/api/chat")
-async def chat(request: Request, db: Session = Depends(get_db)):
-    data = await request.json()
-    user_message = data.get('query', '')
-    if not user_message:
-        return JSONResponse({'error': 'No query provided'}, status_code=400)
-
-    # Context injection logic from app.py
-    injected_context = ""
-    try:
-        all_users = db.query(User).all()
-        found_users = [u for u in all_users if u.name.lower() in user_message.lower()]
-        if found_users:
-            injected_context += "\n\n[SYSTEM DATA INJECTION]\n"
-            for u in found_users:
-                logs = db.query(Attendance).filter(Attendance.user_id == u.id).all()
-                on_time = sum(1 for l in logs if l.status in ['On Time', 'Present'])
-                late = sum(1 for l in logs if l.status in ['Late', 'Tardy'])
-                absent = sum(1 for l in logs if l.status == 'Absent')
-                injected_context += f"User: {u.name}\n- On Time: {on_time}\n- Late: {late}\n- Absent: {absent}\n"
-    except: pass
-
-    base_context = "You are an internal AI chatbot for the school staff attendance web application..." + injected_context
-
-    try:
-        token = os.environ.get("HF_TOKEN")
-        if not token: return JSONResponse({'response': "HF_TOKEN missing."})
-        client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=token)
-        messages = [{"role": "system", "content": base_context}, {"role": "user", "content": user_message}]
-        response = client.chat.completions.create(model="meta-llama/Llama-3.1-70B-Instruct", messages=messages, max_tokens=500)
-        return JSONResponse({'response': response.choices[0].message.content})
-    except Exception as e:
-        return JSONResponse({'response': f"Error: {str(e)}"})
-
-@app.get("/staff_portal", response_class=HTMLResponse)
-async def staff_portal_get(request: Request):
-    return render_template(request, "staff_portal.html", {"user": None, "logs": []})
-
-@app.post("/staff_portal", response_class=HTMLResponse)
-async def staff_portal_post(request: Request, staff_code: str = Form(...), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.staff_code == staff_code).first()
-    logs = []
-    if user:
-        logs = db.query(Attendance).filter(Attendance.user_id == user.id).order_by(Attendance.timestamp.desc()).limit(20).all()
+    if face_engine:
+        background_tasks.add_task(face_engine.train_model)
+        return JSONResponse({'status': 'success', 'message': 'Model training initiated.'})
     else:
-        request.state.flash("Staff ID not found.", "danger")
-    return render_template(request, "staff_portal.html", {"user": user, "logs": logs})
-
-# Background Task Logic
-async def scheduler_task():
-    while True:
-        try:
-            now = get_now_pht()
-            # Implement auto_logout logic here...
-            await asyncio.sleep(60)
-        except Exception:
-            await asyncio.sleep(60)
-
-@app.on_event("startup")
-async def startup_event():
-    with engine.begin() as conn:
-        try: conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'staff'"))
-        except: pass
-    
-    if settings.APP_ROLE == "LOCAL_KIOSK":
-        asyncio.create_task(scheduler_task())
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+        return JSONResponse({'status': 'error', 'message': 'Face engine not available.'}, status_code=500)

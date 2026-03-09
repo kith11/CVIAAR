@@ -7,7 +7,7 @@
     <div class="position-relative d-inline-block">
         <video id="video" autoplay playsinline class="img-fluid border rounded" style="max-width: 640px; width: 100%; transform: scaleX(-1);"></video>
         <canvas id="canvas" style="display:none;"></canvas>
-        <div id="status-overlay" class="position-absolute top-0 start-0 w-100 h-100 d-flex justify-content-center align-items-center" style="background: rgba(0,0,0,0.5); display: none !important;">
+        <div id="status-overlay" class="position-absolute top-0 start-0 w-100 h-100 d-flex justify-content-center align-items-center d-none" style="background: rgba(0,0,0,0.5);">
             <div class="text-white h3">Done! Retraining...</div>
         </div>
     </div>
@@ -23,6 +23,8 @@
 
 <script>
     const userId = "{{ user.id }}";
+    const isReEnroll = {{ re_enroll|tojson }};
+    
     const progressBar = document.getElementById('progress-bar');
     const countSpan = document.getElementById('count');
     const messageDiv = document.getElementById('message');
@@ -33,17 +35,16 @@
     
     let captured = 0;
     let isTraining = false;
-
-    // Start Camera
-    const isReEnroll = {{ 'true' if re_enroll else 'false' }};
+    let resetDone = !isReEnroll;
 
     if (isReEnroll) {
-        messageDiv.textContent = "Re-enrollment started. Resetting existing faces...";
+        messageDiv.textContent = "Re-enrollment: Resetting existing faces...";
         fetch(`/api/reset_faces/${userId}`, { method: 'POST' })
             .then(res => res.json())
             .then(data => {
                 if (data.status === 'success') {
-                    startCamera();
+                    resetDone = true;
+                    messageDiv.textContent = "Faces reset. Camera should start now...";
                 } else {
                     messageDiv.textContent = "Error resetting faces: " + data.message;
                     messageDiv.className = "mt-2 text-danger";
@@ -53,21 +54,50 @@
                 console.error(err);
                 messageDiv.textContent = "Network Error. Please try again.";
             });
-    } else {
-        startCamera();
     }
 
+    // Always try to start camera
+    startCamera();
+
     function startCamera() {
-        navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } })
+        if (!window.isSecureContext && window.location.hostname !== 'localhost') {
+            messageDiv.textContent = "Error: Camera requires a secure context (HTTPS).";
+            messageDiv.className = "mt-2 text-danger";
+            return;
+        }
+
+        navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
             .then(stream => {
                 video.srcObject = stream;
-                messageDiv.textContent = "Camera active. Starting capture in 2 seconds...";
-                setTimeout(captureFace, 2000);
+                messageDiv.textContent = "Camera active. Waiting for initialization...";
+                
+                // Wait for reset and video to be ready
+                const checkReady = setInterval(() => {
+                    if (resetDone && video.readyState === video.HAVE_ENOUGH_DATA) {
+                        clearInterval(checkReady);
+                        messageDiv.textContent = "Ready! Starting capture in 2 seconds...";
+                        setTimeout(captureFace, 2000);
+                    }
+                }, 500);
             })
             .catch(err => {
                 console.error("Camera error:", err);
-                messageDiv.textContent = "Error: Camera access denied or not found. Please allow camera permissions.";
-                messageDiv.className = "mt-2 text-danger";
+                // Fallback
+                navigator.mediaDevices.getUserMedia({ video: true })
+                    .then(stream => {
+                        video.srcObject = stream;
+                        const checkReady = setInterval(() => {
+                            if (resetDone && video.readyState === video.HAVE_ENOUGH_DATA) {
+                                clearInterval(checkReady);
+                                setTimeout(captureFace, 2000);
+                            }
+                        }, 500);
+                    })
+                    .catch(err2 => {
+                        console.error("Camera fallback failed:", err2);
+                        messageDiv.textContent = "Error: Could not access camera.";
+                        messageDiv.className = "mt-2 text-danger";
+                    });
             });
     }
 
@@ -129,9 +159,9 @@
         isTraining = true;
         messageDiv.textContent = "Images collected. Retraining model... (this may take a few seconds)";
         messageDiv.className = "mt-2 text-info fw-bold";
-        statusOverlay.style.display = 'flex';
+        statusOverlay.classList.remove('d-none'); // Show overlay
         
-        fetch('/api/train')
+        fetch('/api/train', { method: 'POST' })
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'success') {
@@ -140,14 +170,14 @@
                         window.location.href = '/admin';
                     }, 2000);
                 } else {
-                    messageDiv.textContent = "Error: " + data.message;
-                    statusOverlay.style.display = 'none';
+                    messageDiv.textContent = "Error: " + (data.message || 'Unknown error');
+                    statusOverlay.classList.add('d-none'); // Hide overlay
                     isTraining = false;
                 }
             })
             .catch(err => {
                 messageDiv.textContent = "Training failed. Check console.";
-                statusOverlay.style.display = 'none';
+                statusOverlay.classList.add('d-none'); // Hide overlay
                 isTraining = false;
             });
     }

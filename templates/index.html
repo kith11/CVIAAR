@@ -36,9 +36,14 @@
                 </div>
                 
                 <div id="status-overlay" class="position-absolute bottom-0 start-0 w-100 p-3 p-md-4 bg-dark bg-opacity-50 backdrop-blur" style="backdrop-filter: blur(10px);">
-                    <div class="d-flex align-items-center">
-                        <div class="spinner-grow spinner-grow-sm text-white me-2 me-md-3" role="status"></div>
-                        <h5 class="mb-0 fw-bold text-white" id="status-message" style="font-size: 0.9rem; line-height: 1.2;">Initializing system...</h5>
+                    <div class="d-flex align-items-center justify-content-between">
+                        <div class="d-flex align-items-center">
+                            <div id="blink-icon" class="me-3 d-none">
+                                <i class="bi bi-eye-fill text-success fs-3 animate-blink-success"></i>
+                            </div>
+                            <div class="spinner-grow spinner-grow-sm text-white me-2 me-md-3" role="status"></div>
+                            <h5 class="mb-0 fw-bold text-white" id="status-message" style="font-size: 0.9rem; line-height: 1.2;">Initializing system...</h5>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -150,6 +155,13 @@
     .animate-pulse { animation: pulse 2s infinite; }
     @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
     .backdrop-blur { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+
+    @keyframes blink-success {
+        0% { transform: scale(0.5); opacity: 0; }
+        50% { transform: scale(1.2); opacity: 1; }
+        100% { transform: scale(1); opacity: 0; }
+    }
+    .animate-blink-success { animation: blink-success 0.8s ease-out forwards; }
 
     /* Standby overlay with floating names */
     .standby-overlay {
@@ -286,6 +298,7 @@
         const attendanceMessage = document.getElementById('attendance-message');
         const btnLogin = document.getElementById('btn-login');
         const btnLogout = document.getElementById('btn-logout');
+        const blinkIcon = document.getElementById('blink-icon');
 
         const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(window.location.hostname);
         let cameraStream = null;
@@ -360,73 +373,75 @@
             .then(response => response.json())
             .then(data => {
                 overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-                overlayCtx.save();
-                overlayCtx.scale(-1, 1);
-                overlayCtx.translate(-overlayCanvas.width, 0);
                 
                 if (data.status === 'success' && data.faces.length > 0) {
                     lastFaces = data.faces;
                     lastFacesTime = Date.now();
-                } else if (Date.now() - lastFacesTime < 20000 && lastFaces.length > 0) {
+                } else if (Date.now() - lastFacesTime < 1500 && lastFaces.length > 0) {
                     data.status = 'success';
                     data.faces = lastFaces;
+                } else {
+                    lastFaces = [];
+                    currentVerifiedUserId = null;
+                    currentVerifiedUserName = null;
+                    attendanceActions.classList.add('d-none');
                 }
 
                 if (data.status === 'success' && data.faces.length > 0) {
                     let mainFace = data.faces[0]; 
                     
+                    // GCash-style Blink Feedback
+                    if (data.faces.some(f => f.blink_detected)) {
+                        blinkIcon.classList.remove('d-none');
+                        setTimeout(() => blinkIcon.classList.add('d-none'), 800);
+                    }
+
+                    overlayCtx.save();
+                    overlayCtx.scale(-1, 1);
+                    overlayCtx.translate(-overlayCanvas.width, 0);
+
                     data.faces.forEach(face => {
                         const [x, y, w, h] = face.rect;
-                        overlayCtx.lineWidth = 2;
-                        overlayCtx.strokeStyle = face.verified ? '#000' : '#666';
+                        overlayCtx.lineWidth = 4;
+                        overlayCtx.strokeStyle = face.verified ? '#198754' : (face.status === 'recognized' ? '#ffc107' : '#dc3545');
                         overlayCtx.strokeRect(x, y, w, h);
                         
-                        // Label
+                        // Label background
+                        overlayCtx.fillStyle = face.verified ? 'rgba(25, 135, 84, 0.9)' : (face.status === 'recognized' ? 'rgba(255, 193, 7, 0.9)' : 'rgba(220, 53, 69, 0.9)');
+                        overlayCtx.fillRect(x, y - 35, w, 35);
+
+                        // Label text (mirrored back to read normally)
+                        overlayCtx.save();
                         overlayCtx.scale(-1, 1);
-                        overlayCtx.font = "600 14px Inter, sans-serif";
-                        overlayCtx.fillStyle = "#000";
-                        overlayCtx.fillText(face.name.toUpperCase(), -(x + w), y - 10);
-                        overlayCtx.scale(-1, 1);
+                        overlayCtx.translate(-(x * 2 + w), 0);
+                        overlayCtx.font = "bold 18px Inter, sans-serif";
+                        overlayCtx.fillStyle = "#fff";
+                        overlayCtx.textAlign = "center";
+                        overlayCtx.fillText(face.name.toUpperCase(), x + w/2, y - 12);
+                        overlayCtx.restore();
                     });
+                    overlayCtx.restore();
 
                     if (mainFace.verified) {
-                        statusMsg.innerHTML = `IDENTITY VERIFIED: ${mainFace.name.toUpperCase()}`;
-                        statusOverlay.style.background = "rgba(0,0,0,0.8)";
+                        statusMsg.innerHTML = `<span class="text-success fw-bold">IDENTITY VERIFIED:</span> ${mainFace.name.toUpperCase()}`;
+                        statusOverlay.style.background = "rgba(25, 135, 84, 0.2)";
                         currentVerifiedUserId = mainFace.user_id || null;
                         currentVerifiedUserName = mainFace.name || null;
                         if (currentVerifiedUserId && currentVerifiedUserName && attendanceActions) {
                             attendanceName.textContent = currentVerifiedUserName;
                             attendanceActions.classList.remove('d-none');
-                            attendanceMessage.classList.add('d-none');
-                            attendanceMessage.textContent = '';
                         }
                     } else if (mainFace.status === 'recognized') {
-                        statusMsg.innerHTML = `HELLO ${mainFace.name.toUpperCase()} — PLEASE BLINK`;
-                        currentVerifiedUserId = null;
-                        currentVerifiedUserName = null;
-                        if (attendanceActions) {
-                            attendanceActions.classList.add('d-none');
-                        }
+                        statusMsg.innerHTML = `HELLO <span class="text-warning fw-bold">${mainFace.name.toUpperCase()}</span> — PLEASE BLINK TO VERIFY`;
+                        statusOverlay.style.background = "rgba(255, 193, 7, 0.1)";
                     } else {
-                        statusMsg.innerHTML = 'IDENTITY UNKNOWN';
-                        currentVerifiedUserId = null;
-                        currentVerifiedUserName = null;
-                        if (attendanceActions) {
-                            attendanceActions.classList.add('d-none');
-                        }
+                        statusMsg.innerHTML = '<span class="text-danger fw-bold">IDENTITY UNKNOWN</span>';
+                        statusOverlay.style.background = "rgba(220, 53, 69, 0.2)";
                     }
                 } else {
-                    if (lastFaces.length === 0) {
-                        statusMsg.innerHTML = 'SCANNING FOR IDENTITY...';
-                        statusOverlay.style.background = "rgba(0,0,0,0.5)";
-                        currentVerifiedUserId = null;
-                        currentVerifiedUserName = null;
-                        if (attendanceActions) {
-                            attendanceActions.classList.add('d-none');
-                        }
-                    }
+                    statusMsg.innerHTML = 'SCANNING FOR IDENTITY...';
+                    statusOverlay.style.background = "rgba(0,0,0,0.5)";
                 }
-                overlayCtx.restore();
             })
             .finally(() => recognizeBusy = false);
         }
@@ -531,7 +546,7 @@
         const standbyNamesEl = document.getElementById('standby-names');
         let standbyActive = false;
         let lastActivity = Date.now();
-        const STANDBY_AFTER_MS = 15000; // 15 seconds of inactivity
+        const STANDBY_AFTER_MS = 300000; // 5 minutes of inactivity
 
         function markActivity() {
             lastActivity = Date.now();
