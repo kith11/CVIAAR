@@ -23,21 +23,23 @@ class SyncEngine:
         connection and syncs any pending (unsynced) records to the remote server.
     """
     
-    def __init__(self, database_url: str, supabase_url: str, supabase_key: str, 
-                 sync_interval: int = 30, device_id: str = "default_device"):
+    def __init__(self, database_url: str, supabase_url: str = None, supabase_key: str = None, 
+                 remote_db_url: str = None, sync_interval: int = 30, device_id: str = "default_device"):
         """
         Initializes the SyncEngine.
 
         Args:
             database_url (str): The connection string for the local SQLite database.
-            supabase_url (str): The URL of the Supabase project.
-            supabase_key (str): The anon key for the Supabase project.
+            supabase_url (str, optional): The URL of the Supabase project.
+            supabase_key (str, optional): The anon key for the Supabase project.
+            remote_db_url (str, optional): The connection string for the remote Postgres database.
             sync_interval (int, optional): The interval in seconds between sync attempts. Defaults to 30.
             device_id (str, optional): A unique identifier for the current device. Defaults to "default_device".
         """
         self.database_url = database_url
         self.supabase_url = supabase_url
         self.supabase_key = supabase_key
+        self.remote_db_url = remote_db_url
         self.sync_interval = sync_interval
         self.device_id = device_id
         
@@ -45,6 +47,17 @@ class SyncEngine:
         self.engine = create_engine(database_url)
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
+        
+        # Database setup for the remote store (if provided)
+        self.remote_engine = None
+        self.RemoteSession = None
+        if self.remote_db_url:
+            try:
+                self.remote_engine = create_engine(self.remote_db_url)
+                self.RemoteSession = sessionmaker(bind=self.remote_engine)
+                logger.info("Remote database connection initialized for syncing.")
+            except Exception as e:
+                logger.error(f"Failed to initialize remote database: {e}")
         
         # Face Engine (can be used for related tasks, e.g., thermal status)
         self.face_engine = FaceEngine()
@@ -90,7 +103,8 @@ class SyncEngine:
     def _check_internet(self) -> bool:
         """Checks for an active internet connection."""
         try:
-            requests.get('https://8.8.8.8', timeout=2)
+            # Using a reliable hostname instead of an IP for the check
+            requests.get('https://www.google.com', timeout=3)
             return True
         except:
             return False
@@ -98,33 +112,109 @@ class SyncEngine:
     def _sync_pending(self):
         """Fetches pending records from the local DB and attempts to sync them."""
         with self.sync_lock:
-            session = self.Session()
+            local_session = self.Session()
             try:
-                pending = session.query(Attendance).filter(Attendance.synced == 0).all()
+                pending = local_session.query(Attendance).filter(Attendance.synced == 0).all()
                 if not pending: return
                 
-                batch = []
-                for r in pending:
-                    batch.append({
-                        'sync_key': r.sync_key,
-                        'user_id': r.user_id,
-                        'timestamp': r.timestamp.isoformat(),
-                        'status': r.status,
-                        'notes': r.notes,
-                        'device_id': r.device_id
-                    })
+                logger.info(f"Found {len(pending)} pending records to sync.")
                 
-                if self._upsert_supabase(batch):
+                # Choose the best sync method available
+                sync_success = False
+                if self.RemoteSession:
+                    sync_success = self._sync_direct_postgres(pending)
+                else:
+                    batch = []
+                    for r in pending:
+                        batch.append({
+                            'sync_key': r.sync_key,
+                            'user_id': r.user_id,
+                            'timestamp': r.timestamp.isoformat(),
+                            'status': r.status,
+                            'notes': r.notes,
+                            'device_id': r.device_id
+                        })
+                    sync_success = self._upsert_supabase(batch)
+                
+                if sync_success:
                     for r in pending:
                         r.synced = 1
                         r.synced_at = datetime.now()
-                    session.commit()
+                    local_session.commit()
                     self.sync_stats['total_synced'] += len(pending)
                     self.sync_stats['last_sync_time'] = datetime.now()
                 else:
                     self.sync_stats['total_failed'] += len(pending)
+            except Exception as e:
+                logger.error(f"Error during _sync_pending: {e}")
             finally:
-                session.close()
+                local_session.close()
+
+    def _sync_direct_postgres(self, pending_records: List[Attendance]) -> bool:
+        """
+        Directly syncs records to the remote Postgres database using SQLAlchemy.
+        
+        This method also ensures that users exist on the remote side before syncing attendance.
+        """
+        if not self.RemoteSession:
+            return False
+            
+        remote_session = self.RemoteSession()
+        local_session = self.Session()
+        try:
+            # 1. Sync users first to avoid foreign key violations
+            unique_user_ids = {r.user_id for r in pending_records}
+            for user_id in unique_user_ids:
+                remote_user = remote_session.query(User).filter_by(id=user_id).first()
+                if not remote_user:
+                    local_user = local_session.query(User).filter_by(id=user_id).first()
+                    if local_user:
+                        new_remote_user = User(
+                            id=local_user.id,
+                            name=local_user.name,
+                            email=local_user.email,
+                            staff_code=local_user.staff_code,
+                            created_at=local_user.created_at,
+                            schedule_start=local_user.schedule_start,
+                            schedule_end=local_user.schedule_end,
+                            employment_type=local_user.employment_type,
+                            role=local_user.role
+                        )
+                        remote_session.add(new_remote_user)
+            
+            remote_session.flush() # Ensure users are created before attendance records
+
+            # 2. Sync attendance records
+            for local_r in pending_records:
+                remote_r = remote_session.query(Attendance).filter_by(sync_key=local_r.sync_key).first()
+                
+                if not remote_r:
+                    new_remote_r = Attendance(
+                        sync_key=local_r.sync_key,
+                        user_id=local_r.user_id,
+                        timestamp=local_r.timestamp,
+                        status=local_r.status,
+                        notes=local_r.notes,
+                        device_id=local_r.device_id,
+                        synced=1,
+                        synced_at=datetime.now()
+                    )
+                    remote_session.add(new_remote_r)
+                else:
+                    remote_r.status = local_r.status
+                    remote_r.notes = local_r.notes
+                    remote_r.synced_at = datetime.now()
+            
+            remote_session.commit()
+            logger.info(f"Direct Postgres sync successful for {len(pending_records)} records.")
+            return True
+        except Exception as e:
+            remote_session.rollback()
+            logger.error(f"Direct Postgres sync failed: {e}")
+            return False
+        finally:
+            remote_session.close()
+            local_session.close()
 
     def _upsert_supabase(self, batch) -> bool:
         """
@@ -136,6 +226,10 @@ class SyncEngine:
         Returns:
             bool: True if the upsert was successful, False otherwise.
         """
+        if not self.supabase_url or not self.supabase_key:
+            logger.error("Supabase URL or Key not configured. Skipping sync.")
+            return False
+
         try:
             headers = {
                 'apikey': self.supabase_key,
@@ -143,10 +237,21 @@ class SyncEngine:
                 'Content-Type': 'application/json',
                 'Prefer': 'resolution=merge-duplicates' # Important for handling duplicates
             }
-            url = f"{self.supabase_url}/rest/v1/attendance_logs"
+            # Ensure URL has trailing slash before rest/v1/
+            base_url = self.supabase_url.rstrip('/')
+            url = f"{base_url}/rest/v1/attendance_logs"
+            
+            logger.info(f"Attempting to sync {len(batch)} records to {url}")
             resp = requests.post(url, json=batch, headers=headers, timeout=10)
-            return resp.status_code in [200, 201]
-        except:
+            
+            if resp.status_code in [200, 201]:
+                logger.info(f"Successfully synced {len(batch)} records.")
+                return True
+            else:
+                logger.error(f"Failed to sync records. Status: {resp.status_code}, Response: {resp.text}")
+                return False
+        except Exception as e:
+            logger.error(f"Exception during Supabase sync: {e}")
             return False
 
     def record_attendance(self, user_id: int, status: str, notes: str = None) -> str:

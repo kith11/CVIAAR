@@ -1,6 +1,7 @@
 import os
 import cv2
 import mediapipe as mp
+
 import numpy as np
 import time
 import logging
@@ -56,6 +57,7 @@ class FaceEngine:
         self.process_interval_ms = process_interval_ms
         self.last_process_time = 0
         
+
         # Improved blink tracking
         from config import settings
         self.ear_threshold = settings.BLINK_EAR_THRESHOLD  # Configurable threshold
@@ -65,9 +67,7 @@ class FaceEngine:
         self.eye_closed_start_time = 0  # Track when eyes started closing
         self.max_eye_closed_duration = settings.BLINK_MAX_CLOSED_SEC  # Configurable max closure time
         
-        # Clear any previous EAR smoothing state
-        if hasattr(self, '_prev_ear'):
-            delattr(self, '_prev_ear')
+
 
     def process_frame(self, frame: np.ndarray) -> List[FaceLandmarkerResult]:
         """Simple frame processing"""
@@ -106,9 +106,10 @@ class FaceEngine:
                         confidence=0.8, blink_detected=bool(blinked)
                     ))
             else:
+                ear_left = 0.3
+
                 # Reset blink state if no face detected
                 self.blink_state = 0
-                self.eye_closed_start_time = 0
                 
         except Exception as e:
             logger.error(f"Face detection error: {e}")
@@ -157,7 +158,6 @@ class FaceEngine:
                 self._prev_ear = ear
             else:
                 # Smoothing factor - higher value means more smoothing, lower means more responsive.
-                # A value of 0.5 provides a balance between noise reduction and responsiveness.
                 alpha = 0.5
                 ear = alpha * ear + (1 - alpha) * self._prev_ear
                 self._prev_ear = ear
@@ -170,7 +170,6 @@ class FaceEngine:
             if hasattr(self, '_prev_ear'):
                 return self._prev_ear
             return 0.3  # Default open eye
-
     def detect_blink(self, ear: float) -> bool:
         """
         Detects a blink based on the Eye Aspect Ratio (EAR) using a state machine.

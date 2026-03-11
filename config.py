@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     CAMERA_HEIGHT: int = 480
     CAMERA_FPS: int = 15
 
+    # Camera Settings
+    CAMERA_WIDTH: int = 640
+    CAMERA_HEIGHT: int = 480
+    CAMERA_FPS: int = 15
+
     # Hugging Face API for AI Chatbot
     HF_TOKEN: str | None = None
 

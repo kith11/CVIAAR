@@ -161,6 +161,7 @@ if settings.APP_ROLE == "LOCAL_KIOSK":
         database_url=local_sqlite_url,
         supabase_url=settings.SUPABASE_URL or "",
         supabase_key=settings.SUPABASE_KEY or "",
+        remote_db_url=settings.DATABASE_URL, # Use direct Postgres URL if provided
         sync_interval=30, # Sync every 30 seconds
         device_id=settings.DEVICE_ID
     )

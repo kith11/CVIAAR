@@ -58,4 +58,28 @@ This application is designed with an **Edge-to-Cloud** architecture:
 - **Online Dashboard**: [https://cviaar.onrender.com/](https://cviaar.onrender.com/)
 
 ---
+## 🔧 Recent Fixes & Maintenance (March 2026)
+
+The following critical issues were resolved to ensure system stability and performance:
+
+### 1. **Docker Environment & Dependency Fixes**
+- **Mediapipe Stability**: Downgraded `mediapipe` to `0.10.9` in [requirements.txt](file:///c%3A/Users/keith/Downloads/projectCVI3/requirements.txt) to maintain compatibility with the legacy `mediapipe.solutions` API used in the codebase.
+- **Unused Libraries**: Removed `openai` from dependencies as it was no longer required for the core biometric engine.
+- **Docker Build**: Optimized the [Dockerfile](file:///c%3A/Users/keith/Downloads/projectCVI3/Dockerfile) and [docker-compose.yml](file:///c%3A/Users/keith/Downloads/projectCVI3/docker-compose.yml) for consistent environment builds across different host systems.
+
+### 2. **Codebase Integrity & Merge Conflict Resolution**
+- **Face Engine Recovery**: Resolved severe merge conflicts in [face_engine.py](file:///c%3A/Users/keith/Downloads/projectCVI3/modules/face_engine.py) that were causing `SyntaxError` and `IndentationError`.
+- **Logic Restoration**: Restored the advanced Eye Aspect Ratio (EAR) calculation and state-machine based blink detection for reliable liveness verification.
+- **Model Cleanup**: Removed corrupted [lbph_model.yml](file:///c%3A/Users/keith/Downloads/projectCVI3/data/lbph_model.yml) containing Git conflict markers, allowing the system to initialize correctly. (Note: Model retraining is required via the Admin Dashboard).
+
+### 3. **Environment Cleanup**
+- Removed accidental files (e.g., `how c2b68d1 --name-only`) that were polluting the project root and potentially causing build issues.
+
+### 4. **Supabase Sync Engine Improvements**
+- **Direct Postgres Syncing**: Added a new, more reliable direct PostgreSQL synchronization method using SQLAlchemy in [sync_engine.py](file:///c%3A/Users/keith/Downloads/projectCVI3/modules/sync_engine.py). This acts as a fallback or replacement for the REST API approach.
+- **User Record Syncing**: The engine now automatically ensures that user records exist on the remote database before attempting to sync attendance logs, preventing foreign key violations.
+- **Enhanced Connectivity Checks**: Updated the internet connectivity check to use `google.com` via HTTPS for better reliability compared to the previous IP-based check.
+- **Improved Error Logging**: Added detailed logging and error reporting throughout the synchronization lifecycle to facilitate easier troubleshooting of connection or authentication issues.
+
+---
 *Developed for efficient, secure, and insightful institutional attendance management.*
