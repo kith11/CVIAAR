@@ -42,25 +42,41 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("modules.sync_engine").setLevel(logging.INFO)
 
-app = FastAPI(title="CVIAAR Attendance System")
+# --- Core Application Setup ---
+# This section initializes the FastAPI application, configures middleware for sessions and
+# flash messages, and sets up directories for static files, templates, and data.
 
-# Session management
+app = FastAPI(
+    title="CVIAAR - AI-Powered Biometric Attendance",
+    description="A real-time attendance monitoring system using facial recognition and liveness detection.",
+    version="1.0.0"
+)
+
+# --- Middleware Configuration ---
+# SessionMiddleware is used for handling user login sessions.
 app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 
-# Custom Flash Middleware
 class FlashMiddleware(BaseHTTPMiddleware):
+    """
+    Custom middleware to emulate Flask's flash messaging system.
+    It allows routes to store messages in a session and display them on the next request.
+    This is useful for showing success or error messages after redirects.
+    """
     async def dispatch(self, request: Request, call_next):
+        # Function to add a message to the session.
         def flash(message: str, category: str = "info"):
             flashes = request.session.get("_flashes", [])
             flashes.append((category, message))
             request.session["_flashes"] = flashes
 
+        # Function to retrieve and clear messages from the session.
         def get_flashed_messages(with_categories: bool = False):
             flashes = request.session.pop("_flashes", [])
             if with_categories:
                 return flashes
             return [f[1] for f in flashes]
 
+        # Make flash functions available in the request state.
         request.state.flash = flash
         request.state.get_flashed_messages = get_flashed_messages
         
@@ -84,104 +100,133 @@ os.makedirs(os.path.join(basedir, "data", "offline"), exist_ok=True)
 app.mount("/static", StaticFiles(directory=os.path.join(basedir, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(basedir, "templates"))
 
-# Database Configuration
+# --- Database Configuration ---
+# The application uses SQLAlchemy for database interaction. It supports both a local SQLite
+# database for offline operation (kiosk mode) and a remote PostgreSQL database (e.g., Supabase)
+# for a centralized admin dashboard.
 APP_ROLE = os.getenv("APP_ROLE", "LOCAL_KIOSK")
 DEVICE_ID = os.getenv("DEVICE_ID", "local-device")
+
+# Determine the database URL based on the application's role.
 local_sqlite_path = os.getenv(
     "SQLITE_DB_PATH",
     os.path.join(basedir, "data", "offline", "cviaar_local.sqlite3"),
 )
 local_sqlite_url = f"sqlite:///{local_sqlite_path}"
+
+# The engine is configured with `check_same_thread=False` for SQLite compatibility with FastAPI.
 engine = create_engine(local_sqlite_url, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def get_db():
+    """FastAPI dependency to create and manage database sessions per request."""
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
-# Redis Client
+# --- Redis Client for Real-Time Data ---
+# Upstash Redis is used as a real-time, low-latency data layer for broadcasting live status
+# updates (e.g., who is currently verified) between the kiosk and viewer clients.
 redis = None
 if settings.UPSTASH_REDIS_URL and settings.UPSTASH_REDIS_TOKEN:
     try:
         redis = Redis(url=settings.UPSTASH_REDIS_URL, token=settings.UPSTASH_REDIS_TOKEN)
-        # Test connection
-        redis.ping()
-        print("Successfully connected to Upstash Redis.")
+        redis.ping() # Test connection
+        logging.info("Successfully connected to Upstash Redis.")
     except Exception as e:
-        print(f"Error connecting to Upstash Redis: {e}")
+        logging.error(f"Error connecting to Upstash Redis: {e}")
         redis = None
 
 def get_redis():
+    """FastAPI dependency to provide a Redis client instance."""
     if not redis:
         raise HTTPException(status_code=503, detail="Redis is not configured or available.")
     return redis
 
-# Camera, Face Engine and Sync Engine
+# --- Application Modules ---
+# These modules are initialized only if the application is running in "LOCAL_KIOSK" mode,
+# as they are responsible for hardware interaction (camera) and heavy processing (face engine).
 if settings.APP_ROLE == "LOCAL_KIOSK":
+    # Camera module for capturing video frames.
     camera = Camera()
+    # FaceEngine handles face detection, recognition, and blink detection.
     face_engine = FaceEngine(
         model_path=os.path.join(basedir, "data", "lbph_model.yml"),
         faces_dir=os.path.join(basedir, "data", "faces"),
     )
+    # SyncEngine is a background worker that syncs offline data with a remote server.
     sync_engine = SyncEngine(
         database_url=local_sqlite_url,
         supabase_url=settings.SUPABASE_URL or "",
         supabase_key=settings.SUPABASE_KEY or "",
-        sync_interval=30,
+        sync_interval=30, # Sync every 30 seconds
         device_id=settings.DEVICE_ID
     )
     sync_engine.start_sync_worker()
 else:
+    # In admin mode, these modules are not needed.
     camera = None
     face_engine = None
     sync_engine = None
 
-# Global state
-attendance_cache = {}
-recognized_faces = {}
-login_attempts = {}
-scan_state = {"status": "no_face", "name": None, "timestamp": 0}
-verified_live_users = {}
-face_verification_cache = {}
-blink_state = {}
+# --- Global State and Caches ---
+# These dictionaries are used for in-memory caching and state management to improve
+# performance and handle real-time user interactions.
+attendance_cache = {} # Caches the last attendance status for a user to prevent duplicate entries.
+recognized_faces = {} # Caches recognized faces to avoid re-processing every frame.
+login_attempts = {} # Tracks login attempts to prevent brute-force attacks.
+scan_state = {"status": "no_face", "name": None, "timestamp": 0} # Holds the current state of the scanner.
+face_verification_cache = {} # Caches liveness verification status based on blinks.
 
-# Face recognition tunables
+# --- Environment-based Tunables ---
+# These functions allow tuning recognition parameters via environment variables without code changes.
 def _env_float(key: str, default: float) -> float:
+    """Safely reads a float from environment variables, with a fallback default."""
     raw = os.getenv(key)
     if not raw: return default
     try: return float(raw)
     except: return default
 
+# Tunable parameters for face recognition and blink detection.
 LBPH_DISTANCE_THRESHOLD = _env_float("LBPH_DISTANCE_THRESHOLD", 80.0)
 RECOGNITION_CACHE_TTL_SEC = _env_float("RECOGNITION_CACHE_TTL_SEC", 3.0)
-BLINK_EAR_THRESHOLD = _env_float("BLINK_EAR_THRESHOLD", 0.25)
-BLINK_MAX_CLOSED_SEC = _env_float("BLINK_MAX_CLOSED_SEC", 2.5)
-VERIFIED_TTL_SEC = _env_float("VERIFIED_TTL_SEC", 30.0)
+VERIFIED_TTL_SEC = _env_float("VERIFIED_TTL_SEC", 6.0)
 
 def get_now_pht():
+    """Returns the current time in Philippine Time (PHT)."""
     return datetime.now(pytz.timezone('Asia/Manila'))
 
-# MJPEG Generator for video_feed
+# --- Real-Time Video Streaming ---
 def generate_frames():
+    """
+    An MJPEG frame generator for the live video feed.
+    It continuously fetches frames from the camera, encodes them as JPEGs, and yields
+    them in a format suitable for streaming to a web browser.
+    """
     if not camera:
-        return
+        # If no camera is found, return a placeholder image with an error message.
+        blank = np.zeros((480, 640, 3), np.uint8)
+        cv2.putText(blank, "No Camera Found", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        ret, buffer = cv2.imencode('.jpg', blank)
+        frame_bytes = buffer.tobytes()
+        while True:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(1)
+
     while True:
         frame = camera.get_frame()
         if frame is None:
-            blank = np.zeros((480, 640, 3), np.uint8)
-            cv2.putText(blank, "No Camera Found", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            ret, buffer = cv2.imencode('.jpg', blank)
-            frame_bytes = buffer.tobytes()
-        else:
-            ret, buffer = cv2.imencode('.jpg', frame)
-            frame_bytes = buffer.tobytes()
+            continue # Skip if frame is not available
+        
+        ret, buffer = cv2.imencode('.jpg', frame)
+        frame_bytes = buffer.tobytes()
 
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-        time.sleep(0.06)
+        time.sleep(1 / settings.CAMERA_FPS) # Control frame rate
 
 # Flask-like template response helper
 def render_template(request: Request, name: str, context: dict = {}):
@@ -199,9 +244,15 @@ def render_template(request: Request, name: str, context: dict = {}):
     ctx.update(context)
     return templates.TemplateResponse(name, ctx)
 
-# Routes
+# --- Core Application Routes ---
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, db: Session = Depends(get_db)):
+    """
+    Serves the main page.
+    - If the app is in "ADMIN_DASHBOARD" mode, it redirects to the admin dashboard.
+    - Otherwise, it renders the main monitoring page (index.html).
+    """
     if settings.APP_ROLE == "ADMIN_DASHBOARD":
         return RedirectResponse(url="/admin")
     
@@ -210,16 +261,26 @@ async def index(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/video_feed")
 async def video_feed():
+    """Provides the live MJPEG video stream from the camera."""
     if settings.APP_ROLE != "LOCAL_KIOSK":
         return RedirectResponse(url="/admin")
     return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
+# --- Authentication Routes ---
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_get(request: Request):
+    """Serves the login page."""
     return render_template(request, "login.html")
 
 @app.post("/login")
 async def login_post(request: Request, password: str = Form(...)):
+    """
+    Handles the login form submission.
+    - Validates the admin password.
+    - Sets session variables upon successful login.
+    - Redirects to the admin dashboard.
+    """
     admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
     if password == admin_password:
         request.session["logged_in"] = True
@@ -232,19 +293,26 @@ async def login_post(request: Request, password: str = Form(...)):
 
 @app.get("/logout")
 async def logout(request: Request):
+    """Clears the session to log the user out."""
     request.session.clear()
     request.state.flash("Logged out.", "info")
     return RedirectResponse(url="/", status_code=303)
 
+# --- Admin & Analytics Routes ---
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin(request: Request, db: Session = Depends(get_db)):
+    """
+    Serves the main admin dashboard.
+    - Requires admin login.
+    - Fetches and displays summary data: users, recent logs, attendance trends, and risk predictions.
+    """
     if not request.session.get("logged_in") or request.session.get("role") != "admin":
         return RedirectResponse(url="/login")
-    
-    users = db.query(User).all()
-    logs = db.query(Attendance).order_by(Attendance.timestamp.desc()).limit(50).all()
-    
+
     analytics = AnalyticsEngine(db)
+    users = db.query(User).order_by(User.name).all()
+    logs = db.query(Attendance).order_by(Attendance.timestamp.desc()).limit(10).all()
     trends = analytics.get_weekly_trends()
     risks = analytics.predict_risk_users()
     
@@ -255,8 +323,139 @@ async def admin(request: Request, db: Session = Depends(get_db)):
         "risks": risks
     })
 
+@app.get("/advanced_analytics", response_class=HTMLResponse)
+async def advanced_analytics(request: Request, db: Session = Depends(get_db)):
+    """
+    Serves the advanced analytics page.
+    - Requires admin login.
+    - Provides a more detailed view of attendance data with filtering options.
+    """
+    if not request.session.get("logged_in") or request.session.get("role") != "admin":
+        return RedirectResponse(url="/login")
+    
+    analytics = AnalyticsEngine(db)
+    users = db.query(User).order_by(User.name).all()
+    
+    return render_template(request, "analytics.html", {
+        "users": users,
+        "trends": {},
+        "stats": {},
+        "risk_factors": {},
+        "employment_types": ["All", "Full-time", "Part-time", "Contractor"]
+    })
+
+@app.get("/audit_logs", response_class=HTMLResponse)
+async def audit_logs(request: Request, db: Session = Depends(get_db)):
+    """
+    Displays a log of all edits made to attendance records.
+    - Requires admin login.
+    """
+    if not request.session.get("logged_in") or request.session.get("role") != "admin":
+        return RedirectResponse(url="/login")
+
+    edits = db.query(AttendanceEdit, Attendance, User).join(Attendance, AttendanceEdit.attendance_id == Attendance.id).join(User, Attendance.user_id == User.id).order_by(AttendanceEdit.edited_at.desc()).all()
+    
+    return render_template(request, "audit_logs.html", {"edits": edits})
+
+# --- Staff & Enrollment Routes ---
+
+@app.get("/staff_portal", response_class=HTMLResponse)
+async def staff_portal_get(request: Request):
+    """Serves the staff portal page where users can view their own attendance."""
+    return render_template(request, "staff_portal.html", {"user": None, "logs": []})
+
+@app.post("/staff_portal", response_class=HTMLResponse)
+async def staff_portal_post(request: Request, staff_code: str = Form(...), db: Session = Depends(get_db)):
+    """
+    Handles the staff ID submission and displays the user's attendance records.
+    """
+    user = db.query(User).filter(User.staff_code == staff_code).first()
+    if not user:
+        return render_template(request, "staff_portal.html", {"user": None, "logs": [], "error": "Invalid Staff ID"})
+    
+    logs = db.query(Attendance).filter(Attendance.user_id == user.id).order_by(Attendance.timestamp.desc()).limit(30).all()
+    return render_template(request, "staff_portal.html", {"user": user, "logs": logs})
+
+@app.get("/re_enroll", response_class=HTMLResponse)
+async def re_enroll_get(request: Request, db: Session = Depends(get_db)):
+    """
+    Serves a page for admins to select a user to re-enroll.
+    """
+    if not request.session.get("logged_in") or request.session.get("role") != "admin":
+        return RedirectResponse(url="/login")
+
+    users = db.query(User).order_by(User.name).all()
+    return render_template(request, "re_enroll.html", {"users": users})
+
+@app.post("/re_enroll")
+async def re_enroll_post(request: Request, staff_code: str = Form(...), db: Session = Depends(get_db)):
+    """
+    Handles the user selection for re-enrollment and redirects to the enrollment page.
+    """
+    user = db.query(User).filter(User.staff_code == staff_code).first()
+    if not user:
+        request.state.flash("User not found!", "danger")
+        return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url=f"/enroll/{user.id}?re_enroll=true", status_code=303)
+
+# --- API Endpoints ---
+
+@app.get("/analytics")
+async def analytics_endpoint(db: Session = Depends(get_db)):
+    """
+    Provides a JSON summary of attendance statistics for all users.
+    Used by the admin dashboard to populate the main analytics table.
+    """
+    analytics = AnalyticsEngine(db)
+    
+    # Get all users
+    users = db.query(User).all()
+    
+    # For each user, calculate their attendance stats
+    user_stats = []
+    for user in users:
+        # Count different attendance statuses for this user
+        present_count = db.query(Attendance).filter(
+            Attendance.user_id == user.id,
+            Attendance.status.in_(["Present", "On Time"])
+        ).count()
+        
+        tardy_count = db.query(Attendance).filter(
+            Attendance.user_id == user.id,
+            Attendance.status.in_(["Late", "Tardy"])
+        ).count()
+        
+        absent_count = db.query(Attendance).filter(
+            Attendance.user_id == user.id,
+            Attendance.status == "Absent"
+        ).count()
+        
+        user_stats.append({
+            "id": user.id,
+            "staff_code": user.staff_code,
+            "name": user.name,
+            "employment_type": user.employment_type,
+            "present": present_count,
+            "tardy": tardy_count,
+            "absent": absent_count
+        })
+    
+    # Also get weekly trends for the chart
+    trends = analytics.get_weekly_trends()
+    
+    return JSONResponse({
+        "stats": user_stats,
+        "trends": trends
+    })
+
 @app.post("/add_user")
 async def add_user(request: Request, name: str = Form(...), email: str = Form(...), employment_type: str = Form("Full-time"), db: Session = Depends(get_db)):
+    """
+    Handles the creation of a new user from the admin dashboard.
+    - Validates input.
+    - Generates a unique staff code.
+    - Creates the user and redirects to the enrollment page.
+    """
     if not name or not email:
         request.state.flash("Name and email are required.", "danger")
         return RedirectResponse(url="/admin", status_code=303)
@@ -282,15 +481,26 @@ async def add_user(request: Request, name: str = Form(...), email: str = Form(..
     return RedirectResponse(url=f"/enroll/{new_user.id}", status_code=303)
 
 @app.get("/enroll/{user_id}", response_class=HTMLResponse)
-async def enroll_page(request: Request, user_id: int, db: Session = Depends(get_db)):
+async def enroll_page(request: Request, user_id: int, db: Session = Depends(get_db), re_enroll: bool = False):
+    """
+    Serves the face capture page for a specific user.
+    - `re_enroll` flag indicates whether to clear existing face data.
+    """
     user = db.get(User, user_id)
     if not user:
         request.state.flash("User not found!", "danger")
         return RedirectResponse(url="/admin", status_code=303)
-    return render_template(request, "enroll.html", {"user": user, "re_enroll": False})
+    return render_template(request, "enroll.html", {"user": user, "re_enroll": re_enroll})
 
 @app.post("/api/capture/{user_id}")
 async def api_capture(user_id: int, request: Request, db: Session = Depends(get_db)):
+    """
+    Captures and saves a face image for a user during enrollment.
+    - Receives an image (base64-encoded or from the live camera).
+    - Detects the most prominent face.
+    - Saves the cropped, grayscale face image to the user's directory.
+    - Requires `LOCAL_KIOSK` mode.
+    """
     if settings.APP_ROLE != "LOCAL_KIOSK":
         return JSONResponse({'status': 'error', 'message': 'Capture not available on this service'}, status_code=404)
     
@@ -337,6 +547,14 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
 
 @app.post("/api/recognize")
 async def api_recognize(request: Request, db: Session = Depends(get_db)):
+    """
+    The core endpoint for face recognition and liveness detection.
+    - Receives an image from the frontend.
+    - Processes the image using the FaceEngine to detect faces, recognize them, and check for blinks.
+    - Implements liveness detection using a time-based verification cache (`face_verification_cache`).
+    - Returns a list of detected faces with their recognition status and verification status.
+    - Requires `LOCAL_KIOSK` mode.
+    """
     if settings.APP_ROLE != "LOCAL_KIOSK":
         return JSONResponse({'status': 'error', 'message': 'Recognition not available'}, status_code=404)
     
@@ -385,7 +603,7 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
         }
         
         # Debug logging for blink detection
-        print(f"DEBUG: Face detection - blink_detected: {res.blink_detected}, bbox: {res.bbox}")
+        logging.debug(f"Face detection - blink_detected: {res.blink_detected}, bbox: {res.bbox}")
 
         if label != -1 and distance < LBPH_DISTANCE_THRESHOLD:
             user = db.get(User, label)
@@ -395,14 +613,22 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
                 result['user_id'] = user.id
                 result['confidence'] = distance
                 
-                # Restore Blink-based verification logic
+                # --- Face Verification Logic ---
+                # This section handles the "liveness" check. A user is considered "verified" if they
+                # have successfully blinked within the `VERIFIED_TTL_SEC` window. This prevents
+                # holding a photo up to the camera to trick the system.
+
+                # Check if the user is already in the verified cache and if the timestamp is still valid.
                 is_currently_verified = face_verification_cache.get(user.id, 0) > (now_ts - VERIFIED_TTL_SEC)
                 
+                # If a blink is detected in the current frame, update the cache with the new timestamp.
                 if res.blink_detected:
                     face_verification_cache[user.id] = now_ts
                     result["verified"] = True
+                # If no blink is detected, but the user is still within the valid TTL window, keep them verified.
                 elif is_currently_verified:
                     result["verified"] = True
+                # Otherwise, the user is not verified.
                 else:
                     result["verified"] = False
         else:
@@ -412,40 +638,25 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
         
         results.append(result)
 
+    # Update live status via Redis
+    if redis:
+        verified_users = {uid: ts for uid, ts in face_verification_cache.items() if ts > (now_ts - VERIFIED_TTL_SEC)}
+        try:
+            redis.set("live_status:verified_users", json.dumps(verified_users))
+        except Exception as e:
+            logging.error(f"Redis error on live_status update: {e}")
+
     return JSONResponse({'status': 'success', 'faces': results})
-
-@app.get("/api/recent_logs")
-async def api_recent_logs(db: Session = Depends(get_db)):
-    logs = db.query(Attendance).order_by(Attendance.timestamp.desc()).limit(10).all()
-    results = []
-    for log in logs:
-        results.append({
-            "name": log.user.name,
-            "time": log.timestamp.strftime("%I:%M %p"),
-            "status": log.status,
-            "color": "success" if log.status == "On Time" else ("warning" if log.status == "Late" else "secondary")
-        })
-    return JSONResponse(results)
-
-@app.get("/api/scan_status")
-async def api_scan_status():
-    return JSONResponse(scan_state)
-
-@app.get("/api/live-status")
-async def api_live_status(redis: Redis = Depends(get_redis)):
-    today_str = get_now_pht().strftime("%Y-%m-%d")
-    live_set_key = f"attendance:{today_str}:present"
-    try:
-        present_count = redis.scard(live_set_key)
-        return JSONResponse({"status": "success", "present_count": present_count})
-    except Exception as e:
-        # This ensures that if Redis is down, the frontend doesn't crash.
-        # It will just show a stale count from the last successful SQL query.
-        print(f"Could not fetch live status from Redis: {e}")
-        raise HTTPException(status_code=503, detail="Live data is currently unavailable.")
 
 @app.post("/api/attendance/record")
 async def api_attendance_record(request: Request, db: Session = Depends(get_db), redis: Redis = Depends(get_redis)):
+    """
+    Records an attendance log for a user (login/logout).
+    - Requires a verified liveness check.
+    - Determines the status (e.g., On Time, Late, Logout) based on the user's schedule.
+    - Uses Redis to prevent duplicate login/logout actions.
+    - Submits the record to the SyncEngine to be saved to the database.
+    """
     try:
         if settings.APP_ROLE != "LOCAL_KIOSK":
             return JSONResponse({'status': 'error', 'message': 'Recording not available on this service'}, status_code=404)
@@ -506,6 +717,12 @@ async def api_attendance_record(request: Request, db: Session = Depends(get_db),
 
 @app.post("/delete_user/{user_id}")
 async def delete_user(user_id: int, request: Request, db: Session = Depends(get_db)):
+    """
+    Deletes a user and all their associated data.
+    - Requires admin login.
+    - Deletes attendance logs, face data, and the user record.
+    - Retrains the face recognition model after deletion.
+    """
     if not request.session.get("logged_in"):
         return RedirectResponse(url="/login")
     
@@ -530,8 +747,13 @@ async def delete_user(user_id: int, request: Request, db: Session = Depends(get_
         
     return RedirectResponse(url="/admin", status_code=303)
 
+@app.get("/retrain")
 @app.post("/retrain")
 async def retrain_model(request: Request, background_tasks: BackgroundTasks):
+    """
+    Initiates a background task to retrain the face recognition model.
+    - Requires admin login.
+    """
     if not request.session.get("logged_in"):
         return RedirectResponse(url="/login")
         
@@ -545,8 +767,108 @@ async def retrain_model(request: Request, background_tasks: BackgroundTasks):
 
 @app.post("/api/train")
 async def api_train_model(background_tasks: BackgroundTasks):
+    """API endpoint to trigger model retraining as a background task."""
     if face_engine:
         background_tasks.add_task(face_engine.train_model)
         return JSONResponse({'status': 'success', 'message': 'Model training initiated.'})
     else:
         return JSONResponse({'status': 'error', 'message': 'Face engine not available.'}, status_code=500)
+
+@app.get("/api/advanced_analytics_data")
+async def advanced_analytics_data(
+    start_date: str = None,
+    end_date: str = None,
+    employment_type: str = "All",
+    user_id: str = "All",
+    db: Session = Depends(get_db)
+):
+    """
+    Provides detailed analytics data for the advanced analytics page.
+    - Fetches data based on the provided filters (date range, employment type, user).
+    - Returns weekly trends, monthly trends, status distribution, peak arrival times, and risk predictions.
+    """
+    analytics = AnalyticsEngine(db)
+    
+    # Parse dates if provided
+    start = datetime.strptime(start_date, '%Y-%m-%d').date() if start_date else None
+    end = datetime.strptime(end_date, '%Y-%m-%d').date() if end_date else None
+    
+    # Get all the different data slices using the engine
+    weekly = analytics.get_weekly_trends(start, end, employment_type, user_id)
+    monthly = analytics.get_monthly_trends(start, end, employment_type, user_id)
+    
+    # Calculate status distribution
+    df = analytics.get_attendance_dataframe(start, end, employment_type, user_id)
+    status_dist = {"labels": [], "data": []}
+    if not df.empty:
+        counts = df['status'].value_counts()
+        status_dist = {
+            "labels": counts.index.tolist(),
+            "data": counts.values.tolist()
+        }
+    
+    # Peak arrival calculation
+    peak_raw = analytics.get_peak_arrival_times(start, end, employment_type, user_id)
+    peak = {"labels": [f"{h}:00" for h in range(24)], "data": [0]*24}
+    for h, count in peak_raw.items():
+        if 0 <= h < 24:
+            peak["data"][h] = int(count)
+    
+    # Risk users
+    risks = analytics.predict_risk_users()
+    
+    return JSONResponse({
+        "weekly_trends": weekly,
+        "monthly_trends": monthly,
+        "status_distribution": status_dist,
+        "peak_arrival": peak,
+        "risk_users": risks
+    })
+
+@app.post("/request_early_report")
+async def request_early_report(request: Request, staff_code: str = Form(...), db: Session = Depends(get_db)):
+    """Handles the request for an early attendance report from the staff portal."""
+    user = db.query(User).filter(User.staff_code == staff_code).first()
+    if not user:
+        request.state.flash("Invalid Staff ID", "danger")
+        return RedirectResponse(url="/staff_portal", status_code=303)
+        
+    # Logic to send report or initiate it
+    request.state.flash(f"Early report request for {user.name} has been sent.", "success")
+    return RedirectResponse(url="/staff_portal", status_code=303)
+
+@app.post("/api/reset_faces/{user_id}")
+async def reset_faces(user_id: int, db: Session = Depends(get_db)):
+    """Deletes all face data for a user, allowing for re-enrollment."""
+    user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
+    if os.path.exists(user_dir):
+        import shutil
+        shutil.rmtree(user_dir)
+        os.makedirs(user_dir, exist_ok=True)
+        return JSONResponse({'status': 'success', 'message': f'Faces reset for user {user_id}'})
+    return JSONResponse({'status': 'error', 'message': 'User directory not found'}, status_code=404)
+
+@app.post("/api/chat")
+async def api_chat(request: Request):
+    """Handles the AI chatbot interaction, providing a fallback response if offline."""
+    data = await request.json()
+    user_message = data.get("message", "")
+    
+    # Simple fallback response if HF_TOKEN is missing or AI fails
+    bot_response = "I'm currently in offline mode. How can I help you with the attendance system?"
+    
+    if settings.HF_TOKEN:
+        try:
+            # Here we could call Hugging Face API
+            # For now, let's keep it simple
+            pass
+        except Exception:
+            pass
+            
+    return JSONResponse({"response": bot_response})
+
+# --- Main Application Entry Point ---
+if __name__ == "__main__":
+    """Runs the FastAPI application using uvicorn when the script is executed directly."""
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=5000)

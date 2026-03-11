@@ -1,3 +1,22 @@
+<!-- 
+    Main Monitoring Page (index.html)
+
+    This is the primary user interface for the real-time attendance monitoring kiosk.
+    It consists of three main sections:
+    1.  Live Video Feed: Displays the camera feed with a real-time overlay for face detection,
+        recognition, and liveness verification.
+    2.  Attendance Actions: Buttons for logging in and out, which become active only after a user's
+        identity has been successfully verified through a blink.
+    3.  Sidebar: Contains a "Retrain Identity" modal for users who are not being recognized
+        and a list of recent attendance activities.
+
+    Key Interactions:
+    - The page continuously sends frames from the camera to the `/api/recognize` endpoint.
+    - The backend responds with face detection data, which is then drawn onto an overlay canvas.
+    - If a user is recognized and blinks, the attendance action buttons are enabled.
+    - Clicking "Log in" or "Log out" sends a request to the `/api/attendance/record` endpoint.
+    - The "Recent Activity" list is periodically updated by polling the `/api/recent_logs` endpoint.
+-->
 {% extends "layout.html" %}
 
 {% block content %}

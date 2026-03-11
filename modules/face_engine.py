@@ -8,6 +8,7 @@ from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass
 from PIL import Image
 
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -55,11 +56,18 @@ class FaceEngine:
         self.process_interval_ms = process_interval_ms
         self.last_process_time = 0
         
-        # Simple blink tracking
-        self.ear_threshold = 0.25  # Standard threshold
+        # Improved blink tracking
+        from config import settings
+        self.ear_threshold = settings.BLINK_EAR_THRESHOLD  # Configurable threshold
         self.blink_state = 0  # 0: open, 1: closed
         self.last_blink_time = 0
         self.blink_count = 0
+        self.eye_closed_start_time = 0  # Track when eyes started closing
+        self.max_eye_closed_duration = settings.BLINK_MAX_CLOSED_SEC  # Configurable max closure time
+        
+        # Clear any previous EAR smoothing state
+        if hasattr(self, '_prev_ear'):
+            delattr(self, '_prev_ear')
 
     def process_frame(self, frame: np.ndarray) -> List[FaceLandmarkerResult]:
         """Simple frame processing"""
@@ -98,7 +106,9 @@ class FaceEngine:
                         confidence=0.8, blink_detected=bool(blinked)
                     ))
             else:
-                self.blink_state = 0  # Reset if no face
+                # Reset blink state if no face detected
+                self.blink_state = 0
+                self.eye_closed_start_time = 0
                 
         except Exception as e:
             logger.error(f"Face detection error: {e}")
@@ -106,7 +116,7 @@ class FaceEngine:
         return results
 
     def calculate_ear(self, l2d: np.ndarray) -> float:
-        """Simple EAR calculation - proven working version"""
+        """Improved EAR calculation with noise reduction"""
         try:
             # Right eye landmarks (simplified but effective)
             right_eye_top = l2d[386]    # Upper eyelid
@@ -128,39 +138,93 @@ class FaceEngine:
             right_horizontal = np.linalg.norm(right_eye_left - right_eye_right)
             left_horizontal = np.linalg.norm(left_eye_left - left_eye_right)
             
-            # EAR for each eye
-            ear_right = right_vertical / right_horizontal if right_horizontal > 0 else 0.3
-            ear_left = left_vertical / left_horizontal if left_horizontal > 0 else 0.3
+            # EAR for each eye (with safety checks)
+            if right_horizontal > 0:
+                ear_right = right_vertical / right_horizontal
+            else:
+                ear_right = 0.3  # Default open eye value
+                
+            if left_horizontal > 0:
+                ear_left = left_vertical / left_horizontal
+            else:
+                ear_left = 0.3  # Default open eye value
             
             # Average both eyes
             ear = (ear_right + ear_left) / 2.0
+            
+            # Apply simple smoothing to reduce noise (exponential moving average)
+            if not hasattr(self, '_prev_ear'):
+                self._prev_ear = ear
+            else:
+                # Smoothing factor - higher value means more smoothing, lower means more responsive.
+                # A value of 0.5 provides a balance between noise reduction and responsiveness.
+                alpha = 0.5
+                ear = alpha * ear + (1 - alpha) * self._prev_ear
+                self._prev_ear = ear
             
             return ear
             
         except Exception as e:
             logger.error(f"EAR calculation error: {e}")
+            # Return previous EAR if available, otherwise default
+            if hasattr(self, '_prev_ear'):
+                return self._prev_ear
             return 0.3  # Default open eye
 
     def detect_blink(self, ear: float) -> bool:
-        """Simple blink detection - proven working logic"""
+        """
+        Detects a blink based on the Eye Aspect Ratio (EAR) using a state machine.
+
+        The process is as follows:
+        1.  **State 0 (Eyes Open)**: If the EAR drops below the `ear_threshold`, it transitions
+            to State 1, marking the moment the eyes start closing.
+        2.  **State 1 (Eyes Closed)**: 
+            - If the eyes remain closed for longer than `max_eye_closed_duration`, it's considered
+              a false positive (e.g., user is sleeping or looking down), and the state resets.
+            - If the EAR rises above the threshold, it signifies the eyes are opening.
+            - The duration of the closure is validated to be within a realistic range (150ms - 1s).
+            - A debounce check ensures that rapid, successive blinks are not counted.
+            - If all checks pass, a blink is registered, and the state resets.
+
+        Args:
+            ear (float): The calculated Eye Aspect Ratio.
+
+        Returns:
+            bool: True if a valid blink was completed, False otherwise.
+        """
         now = time.time()
         blink_completed = False
         
-        # Simple state machine
+        # Improved state machine with timeout protection
         if self.blink_state == 0:  # Eyes open
             if ear < self.ear_threshold:  # Eyes closing
                 self.blink_state = 1
-                logger.info(f"Eyes closing - EAR: {ear:.3f}")
+                self.eye_closed_start_time = now  # Track when eyes started closing
+                logger.debug(f"Eyes closing - EAR: {ear:.3f}")
                 
         elif self.blink_state == 1:  # Eyes closed
-            if ear >= self.ear_threshold:  # Eyes opening
-                # Check if enough time passed (simple debounce)
-                if now - self.last_blink_time > 0.2:  # 200ms minimum
-                    blink_completed = True
-                    self.blink_count += 1
-                    self.last_blink_time = now
-                    logger.info(f"✅ BLINK DETECTED! EAR: {ear:.3f}, Count: {self.blink_count}")
+            # Check if eyes have been closed too long (possible false detection)
+            if now - self.eye_closed_start_time > self.max_eye_closed_duration:
+                # Reset state - likely a false detection or user sleeping
+                self.blink_state = 0
+                self.eye_closed_start_time = 0
+                logger.debug(f"Eyes closed too long, resetting - EAR: {ear:.3f}")
+            elif ear >= self.ear_threshold:  # Eyes opening
+                # Validate blink duration (not too short, not too long)
+                blink_duration = now - self.eye_closed_start_time
+                if 0.15 <= blink_duration <= 1.0:  # Valid blink duration: 150ms to 1s
+                    # Additional debounce check
+                    if now - self.last_blink_time > 0.3:  # Minimum 300ms between blinks
+                        blink_completed = True
+                        self.blink_count += 1
+                        self.last_blink_time = now
+                        logger.info(f"✅ BLINK DETECTED! EAR: {ear:.3f}, Duration: {blink_duration:.2f}s, Count: {self.blink_count}")
+                    else:
+                        logger.debug(f"Blink detected but ignored due to debounce - EAR: {ear:.3f}")
+                else:
+                    logger.debug(f"Blink duration invalid ({blink_duration:.2f}s) - EAR: {ear:.3f}")
                 self.blink_state = 0  # Reset to open
+                self.eye_closed_start_time = 0
                 
         return blink_completed
 

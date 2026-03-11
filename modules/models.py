@@ -7,6 +7,19 @@ Base = declarative_base()
 
 
 class User(Base):
+    """
+    Represents a user in the system.
+
+    Attributes:
+        id (int): Primary key.
+        name (str): The user's full name.
+        email (str): The user's email address (used for notifications).
+        staff_code (str): A unique 6-digit code for staff portal access.
+        schedule_start (str): The user's expected start time (HH:MM).
+        schedule_end (str): The user's expected end time (HH:MM).
+        employment_type (str): The user's employment status (e.g., Full-time, Part-time).
+        role (str): The user's role (e.g., staff, admin).
+    """
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True)
@@ -23,6 +36,19 @@ class User(Base):
 
 
 class Attendance(Base):
+    """
+    Represents a single attendance record.
+
+    Attributes:
+        id (int): Primary key.
+        sync_key (str): A unique UUID for offline synchronization.
+        user_id (int): Foreign key to the User model.
+        timestamp (datetime): The date and time of the attendance event.
+        status (str): The status of the attendance (e.g., On Time, Late, Logout).
+        notes (str): Optional notes for the record.
+        device_id (str): The ID of the device that recorded the attendance.
+        synced (int): A flag indicating if the record has been synced with a remote server.
+    """
     __tablename__ = "attendance_logs"
 
     id = Column(Integer, primary_key=True)
@@ -38,6 +64,18 @@ class Attendance(Base):
 
 
 class AttendanceEdit(Base):
+    """
+    Logs any modifications made to an attendance record.
+
+    This table provides an audit trail for changes to attendance data.
+
+    Attributes:
+        id (int): Primary key.
+        attendance_id (int): Foreign key to the Attendance model.
+        previous_status (str): The original status of the attendance record.
+        new_status (str): The updated status.
+        edited_by (str): The user who made the edit.
+    """
     __tablename__ = "attendance_edits"
 
     id = Column(Integer, primary_key=True)
@@ -51,6 +89,15 @@ class AttendanceEdit(Base):
 
 
 class ExcuseNote(Base):
+    """
+    Represents an excuse note submitted for a specific attendance record.
+
+    Attributes:
+        id (int): Primary key.
+        attendance_id (int): Foreign key to the Attendance model.
+        note (str): The content of the excuse note.
+        created_by (str): The user who submitted the note.
+    """
     __tablename__ = "excuse_notes"
 
     id = Column(Integer, primary_key=True)
@@ -61,6 +108,15 @@ class ExcuseNote(Base):
 
 
 class Device(Base):
+    """
+    Represents a physical device (kiosk) in the system.
+
+    Attributes:
+        id (int): Primary key.
+        device_id (str): A unique identifier for the device.
+        name (str): A human-readable name for the device.
+        location (str): The physical location of the device.
+    """
     __tablename__ = "devices"
 
     id = Column(Integer, primary_key=True)

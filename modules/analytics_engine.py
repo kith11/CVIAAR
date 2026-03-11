@@ -5,11 +5,39 @@ from datetime import datetime, timedelta
 from .models import Attendance, User
 
 class AnalyticsEngine:
+    """
+    A data processing engine for calculating attendance analytics.
+
+    This class provides methods to fetch, filter, and analyze attendance data
+    to generate insights such as weekly/monthly trends, user risk predictions,
+    peak arrival times, and status distributions.
+    """
     def __init__(self, db_session):
+        """
+        Initializes the AnalyticsEngine with a database session.
+
+        Args:
+            db_session: An active SQLAlchemy session.
+        """
         self.db = db_session
 
     def get_attendance_dataframe(self, start_date=None, end_date=None, employment_type=None, user_id=None):
-        """Fetch attendance records with filters and convert to DataFrame."""
+        """
+        Fetches attendance records from the database and converts them into a pandas DataFrame.
+
+        This is a core utility method that allows for flexible filtering based on date range,
+        employment type, and user ID. The resulting DataFrame includes user information and
+        is enriched with temporal features like hour and weekday.
+
+        Args:
+            start_date (date, optional): The start date for the filter. Defaults to None.
+            end_date (date, optional): The end date for the filter. Defaults to None.
+            employment_type (str, optional): Filter by a specific employment type. Defaults to None.
+            user_id (int, optional): Filter by a specific user ID. Defaults to None.
+
+        Returns:
+            pd.DataFrame: A DataFrame containing the filtered attendance records.
+        """
         query = self.db.query(Attendance, User).join(User, Attendance.user_id == User.id)
         
         if start_date:
@@ -45,7 +73,20 @@ class AnalyticsEngine:
         return df
 
     def get_weekly_trends(self, start_date=None, end_date=None, employment_type=None, user_id=None):
-        """Calculate attendance counts by day of week."""
+        """
+        Calculates the total number of present, late, and absent records for each day of the week.
+
+        This method is used to generate data for the weekly trend charts on the dashboard.
+
+        Args:
+            start_date (date, optional): The start date for the filter. Defaults to None.
+            end_date (date, optional): The end date for the filter. Defaults to None.
+            employment_type (str, optional): Filter by a specific employment type. Defaults to None.
+            user_id (int, optional): Filter by a specific user ID. Defaults to None.
+
+        Returns:
+            dict: A dictionary containing labels for the days of the week and corresponding counts for each status.
+        """
         df = self.get_attendance_dataframe(start_date, end_date, employment_type, user_id)
         if df.empty:
             return {'labels': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], 
@@ -77,7 +118,20 @@ class AnalyticsEngine:
         }
 
     def get_monthly_trends(self, start_date=None, end_date=None, employment_type=None, user_id=None):
-        """Calculate attendance counts by day of month over the selected period."""
+        """
+        Calculates the total number of present, late, and absent records for each day of the month.
+
+        This provides a day-by-day view of attendance patterns over a monthly period.
+
+        Args:
+            start_date (date, optional): The start date for the filter. Defaults to None.
+            end_date (date, optional): The end date for the filter. Defaults to None.
+            employment_type (str, optional): Filter by a specific employment type. Defaults to None.
+            user_id (int, optional): Filter by a specific user ID. Defaults to None.
+
+        Returns:
+            dict: A dictionary containing labels for the days of the month and corresponding counts for each status.
+        """
         df = self.get_attendance_dataframe(start_date, end_date, employment_type, user_id)
         if df.empty:
             return {'labels': [], 'present': [], 'late': [], 'absent': []}
@@ -123,7 +177,16 @@ class AnalyticsEngine:
         }
 
     def predict_risk_users(self):
-        """Identify users at high risk of being late or absent."""
+        """
+        Identifies users at high risk of being late or absent based on their attendance history.
+
+        This method uses a simple heuristic model:
+        - **Medium Risk**: Late rate > 30%
+        - **High Risk**: Absent rate > 15% or Late rate > 50%
+
+        Returns:
+            list: A list of dictionaries, where each dictionary represents a user at risk.
+        """
         df = self.get_attendance_dataframe()
         if df.empty:
             return []
@@ -170,7 +233,20 @@ class AnalyticsEngine:
         return risk_report
 
     def get_peak_arrival_times(self, start_date=None, end_date=None, employment_type=None, user_id=None):
-        """Analyze when most people arrive."""
+        """
+        Analyzes attendance data to determine the peak arrival times.
+
+        This method groups arrivals by the hour to identify when the most people are logging in.
+
+        Args:
+            start_date (date, optional): The start date for the filter. Defaults to None.
+            end_date (date, optional): The end date for the filter. Defaults to None.
+            employment_type (str, optional): Filter by a specific employment type. Defaults to None.
+            user_id (int, optional): Filter by a specific user ID. Defaults to None.
+
+        Returns:
+            dict: A dictionary where keys are hours (0-23) and values are the count of arrivals.
+        """
         df = self.get_attendance_dataframe(start_date, end_date, employment_type, user_id)
         if df.empty:
             return {}
@@ -199,7 +275,20 @@ class AnalyticsEngine:
         return {}
 
     def get_status_distribution(self, start_date=None, end_date=None, employment_type=None, user_id=None):
-        """Get the distribution of attendance statuses."""
+        """
+        Calculates the distribution of different attendance statuses (e.g., Late, On Time, Absent).
+
+        This is used to generate the pie chart on the analytics page.
+
+        Args:
+            start_date (date, optional): The start date for the filter. Defaults to None.
+            end_date (date, optional): The end date for the filter. Defaults to None.
+            employment_type (str, optional): Filter by a specific employment type. Defaults to None.
+            user_id (int, optional): Filter by a specific user ID. Defaults to None.
+
+        Returns:
+            dict: A dictionary containing labels, data, and colors for the chart.
+        """
         df = self.get_attendance_dataframe(start_date, end_date, employment_type, user_id)
         if df.empty:
             return {

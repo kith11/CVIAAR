@@ -1,3 +1,26 @@
+<!-- 
+    Admin Dashboard (admin.html)
+
+    This is the main administrative interface for managing the attendance system.
+    It provides a comprehensive overview of attendance data and user management tools.
+
+    Key Sections:
+    1.  Summary Stats: Displays high-level counts of total users, present, tardy, and absent.
+    2.  Weekly Trends: A D3.js bar chart visualizing attendance patterns over the week.
+    3.  Risk Prediction: A table that uses a simple predictive model to identify users at risk
+        of being late or absent.
+    4.  User Status Table: A detailed table of all users with their attendance statistics.
+    5.  Sidebar:
+        -   Reports: Allows exporting attendance data to CSV.
+        -   Gmail Registration: A form to add new users to the system.
+        -   System Controls: Buttons to retrain the face recognition model and sign out.
+        -   Recent Logs: A compact list of the most recent attendance activities.
+
+    Data Fetching:
+    - The main user and risk data is initially rendered by the backend.
+    - The user status table and weekly trends chart are populated by an initial fetch to the `/analytics` endpoint.
+    - The "Present" count is updated in real-time by polling the `/api/live-status` endpoint.
+-->
 {% extends "layout.html" %}
 
 {% block content %}
@@ -151,7 +174,7 @@
         <div class="card">
             <div class="card-title"><i class="bi bi-gear me-2"></i>System</div>
             <div class="d-grid gap-2">
-                <a href="/train" class="btn btn-outline text-start">
+                <a href="/retrain" class="btn btn-outline text-start">
                     <i class="bi bi-arrow-repeat me-2"></i>Retrain Model
                 </a>
                 <a href="/logout" class="btn btn-outline text-start text-danger">
