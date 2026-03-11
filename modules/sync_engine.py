@@ -153,8 +153,6 @@ class SyncEngine:
     def _sync_direct_postgres(self, pending_records: List[Attendance]) -> bool:
         """
         Directly syncs records to the remote Postgres database using SQLAlchemy.
-        
-        This method also ensures that users exist on the remote side before syncing attendance.
         """
         if not self.RemoteSession:
             return False
@@ -162,7 +160,7 @@ class SyncEngine:
         remote_session = self.RemoteSession()
         local_session = self.Session()
         try:
-            # 1. Sync users first to avoid foreign key violations
+            # 1. Sync users first
             unique_user_ids = {r.user_id for r in pending_records}
             for user_id in unique_user_ids:
                 remote_user = remote_session.query(User).filter_by(id=user_id).first()
@@ -182,7 +180,7 @@ class SyncEngine:
                         )
                         remote_session.add(new_remote_user)
             
-            remote_session.flush() # Ensure users are created before attendance records
+            remote_session.flush()
 
             # 2. Sync attendance records
             for local_r in pending_records:
@@ -206,11 +204,11 @@ class SyncEngine:
                     remote_r.synced_at = datetime.now()
             
             remote_session.commit()
-            logger.info(f"Direct Postgres sync successful for {len(pending_records)} records.")
             return True
         except Exception as e:
             remote_session.rollback()
-            logger.error(f"Direct Postgres sync failed: {e}")
+            logger.error(f"Sync error: {e}")
+            # Fallback to REST if Postgres fails (e.g., auth error)
             return False
         finally:
             remote_session.close()

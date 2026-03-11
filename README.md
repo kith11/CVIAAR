@@ -76,10 +76,10 @@ The following critical issues were resolved to ensure system stability and perfo
 - Removed accidental files (e.g., `how c2b68d1 --name-only`) that were polluting the project root and potentially causing build issues.
 
 ### 4. **Supabase Sync Engine Improvements**
-- **Direct Postgres Syncing**: Added a new, more reliable direct PostgreSQL synchronization method using SQLAlchemy in [sync_engine.py](file:///c%3A/Users/keith/Downloads/projectCVI3/modules/sync_engine.py). This acts as a fallback or replacement for the REST API approach.
-- **User Record Syncing**: The engine now automatically ensures that user records exist on the remote database before attempting to sync attendance logs, preventing foreign key violations.
-- **Enhanced Connectivity Checks**: Updated the internet connectivity check to use `google.com` via HTTPS for better reliability compared to the previous IP-based check.
-- **Improved Error Logging**: Added detailed logging and error reporting throughout the synchronization lifecycle to facilitate easier troubleshooting of connection or authentication issues.
+- **Hybrid Sync Strategy**: Implemented a robust synchronization method that first attempts a direct PostgreSQL connection for performance and reliability, with an automatic fallback to the Supabase REST API if authentication or network issues occur.
+- **Automated User Sync**: The engine now proactively ensures all local user records exist on the remote database before syncing attendance logs, eliminating foreign key constraint errors during synchronization.
+- **Reliable Connectivity Probes**: Switched the internet availability check from a raw IP probe to a standard HTTPS request to `google.com`, ensuring the sync worker only activates when a stable internet connection is actually present.
+- **Enhanced Diagnostics**: Integrated detailed logging throughout the synchronization process to provide clear visibility into sync success rates, batch sizes, and specific error messages for faster troubleshooting.
 
 ---
 *Developed for efficient, secure, and insightful institutional attendance management.*
