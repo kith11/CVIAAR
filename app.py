@@ -5,6 +5,8 @@ import time
 import threading
 import base64
 import sqlite3
+import csv
+import io
 import random
 import pytz
 import smtplib
@@ -13,6 +15,7 @@ import json
 import asyncio
 from typing import Optional, List
 from datetime import datetime, timedelta
+from calendar import monthrange
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -190,14 +193,26 @@ def _env_float(key: str, default: float) -> float:
     try: return float(raw)
     except: return default
 
+def _env_int(key: str, default: int) -> int:
+    raw = os.getenv(key)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except:
+        return default
+
 # Tunable parameters for face recognition and blink detection.
-LBPH_DISTANCE_THRESHOLD = _env_float("LBPH_DISTANCE_THRESHOLD", 80.0)
+LBPH_DISTANCE_THRESHOLD = _env_float("LBPH_DISTANCE_THRESHOLD", 50.0)
 RECOGNITION_CACHE_TTL_SEC = _env_float("RECOGNITION_CACHE_TTL_SEC", 3.0)
 VERIFIED_TTL_SEC = _env_float("VERIFIED_TTL_SEC", 6.0)
+MIN_FACE_SIZE_PX = _env_int("MIN_FACE_SIZE_PX", 90)
+RECOGNITION_STREAK_REQUIRED = _env_int("RECOGNITION_STREAK_REQUIRED", 2)
+RECOGNITION_STREAK_TIMEOUT_SEC = _env_float("RECOGNITION_STREAK_TIMEOUT_SEC", 1.0)
 
-def get_now_pht():
-    """Returns the current time in Philippine Time (PHT)."""
-    return datetime.now(pytz.timezone('Asia/Manila'))
+def get_now():
+    """Returns the current time in the system's local timezone."""
+    return datetime.now().astimezone()
 
 # --- Real-Time Video Streaming ---
 def generate_frames():
@@ -228,6 +243,31 @@ def generate_frames():
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
         time.sleep(1 / settings.CAMERA_FPS) # Control frame rate
+
+def send_email(to_email: str, subject: str, body: str) -> bool:
+    """Sends an email using the configured Gmail account."""
+    if not all([settings.MAIL_USERNAME, settings.MAIL_APP_PASSWORD]):
+        logging.error("Email credentials not configured. Skipping email.")
+        return False
+
+    msg = MIMEMultipart()
+    msg['From'] = settings.MAIL_USERNAME
+    msg['To'] = to_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'html'))
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(settings.MAIL_USERNAME, settings.MAIL_APP_PASSWORD)
+            server.send_message(msg)
+            logging.info(f"Email sent successfully to {to_email}")
+            return True
+    except smtplib.SMTPAuthenticationError:
+        logging.error("SMTP Authentication Error: Check your MAIL_APP_PASSWORD.")
+        return False
+    except Exception as e:
+        logging.error(f"Failed to send email: {e}")
+        return False
 
 # Flask-like template response helper
 def render_template(request: Request, name: str, context: dict = {}):
@@ -357,6 +397,177 @@ async def audit_logs(request: Request, db: Session = Depends(get_db)):
     edits = db.query(AttendanceEdit, Attendance, User).join(Attendance, AttendanceEdit.attendance_id == Attendance.id).join(User, Attendance.user_id == User.id).order_by(AttendanceEdit.edited_at.desc()).all()
     
     return render_template(request, "audit_logs.html", {"edits": edits})
+
+@app.get("/export_attendance_csv")
+async def export_attendance_csv(request: Request, db: Session = Depends(get_db)):
+    if not request.session.get("logged_in") or request.session.get("role") != "admin":
+        return RedirectResponse(url="/login")
+
+    query = (
+        db.query(Attendance, User)
+        .join(User, Attendance.user_id == User.id)
+        .order_by(Attendance.timestamp.desc())
+    )
+
+    def generate():
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "attendance_id",
+                "user_id",
+                "staff_code",
+                "name",
+                "employment_type",
+                "timestamp",
+                "status",
+            ]
+        )
+        yield output.getvalue()
+        output.seek(0)
+        output.truncate(0)
+
+        for attendance, user in query.yield_per(1000):
+            ts = attendance.timestamp
+            try:
+                timestamp_str = ts.astimezone().strftime("%Y-%m-%d %H:%M:%S") if ts else ""
+            except Exception:
+                try:
+                    timestamp_str = ts.strftime("%Y-%m-%d %H:%M:%S") if ts else ""
+                except Exception:
+                    timestamp_str = str(ts) if ts else ""
+
+            writer.writerow(
+                [
+                    attendance.id,
+                    user.id,
+                    user.staff_code or "",
+                    user.name or "",
+                    user.employment_type or "",
+                    timestamp_str,
+                    attendance.status or "",
+                ]
+            )
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+
+    filename = f"attendance_export_{get_now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return StreamingResponse(
+        generate(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+@app.get("/generate_report_form")
+async def generate_report_form_missing_id(request: Request):
+    request.state.flash("Please select a user from the Dashboard to generate a report.", "danger")
+    return RedirectResponse(url="/admin", status_code=303)
+
+@app.get("/generate_report_form/{user_id}", response_class=HTMLResponse)
+async def generate_report_form(request: Request, user_id: int, db: Session = Depends(get_db)):
+    if not request.session.get("logged_in") or request.session.get("role") != "admin":
+        return RedirectResponse(url="/login")
+
+    user = db.get(User, user_id)
+    if not user:
+        request.state.flash("User not found.", "danger")
+        return RedirectResponse(url="/admin", status_code=303)
+
+    now = get_now()
+    return render_template(
+        request,
+        "report_form.html",
+        {"user": user, "current_month": now.month},
+    )
+
+@app.post("/generate_report", response_class=HTMLResponse)
+async def generate_report(
+    request: Request,
+    user_id: int = Form(...),
+    month: int = Form(...),
+    year: int = Form(...),
+    db: Session = Depends(get_db),
+):
+    if not request.session.get("logged_in") or request.session.get("role") != "admin":
+        return RedirectResponse(url="/login")
+
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    month = max(1, min(12, int(month)))
+    year = int(year)
+
+    start = datetime(year, month, 1)
+    last_day = monthrange(year, month)[1]
+    end = datetime(year, month, last_day, 23, 59, 59, 999999)
+
+    logs = (
+        db.query(Attendance)
+        .filter(
+            Attendance.user_id == user.id,
+            Attendance.timestamp >= start,
+            Attendance.timestamp <= end,
+        )
+        .order_by(Attendance.timestamp.asc())
+        .all()
+    )
+
+    by_day = {}
+    for log in logs:
+        if not log.timestamp:
+            continue
+        day = log.timestamp.day
+        by_day.setdefault(day, []).append(log)
+
+    in_statuses = {"On Time", "Late", "Present", "Tardy"}
+    days = []
+    for d in range(1, last_day + 1):
+        day_logs = by_day.get(d, [])
+        day_logs.sort(key=lambda l: l.timestamp)
+
+        am_in = am_out = pm_in = pm_out = None
+
+        for log in day_logs:
+            ts = log.timestamp
+            if not ts:
+                continue
+
+            is_am = ts.hour < 12
+            is_in = (log.status or "") in in_statuses
+            is_out = (log.status or "") == "Logout"
+
+            if is_am:
+                if is_in and am_in is None:
+                    am_in = ts
+                elif is_out:
+                    am_out = ts
+            else:
+                if is_in and pm_in is None:
+                    pm_in = ts
+                elif is_out:
+                    pm_out = ts
+
+        fmt = lambda dt: dt.strftime("%I:%M %p") if dt else None
+        days.append(
+            {
+                "day": d,
+                "am_in": fmt(am_in),
+                "am_out": fmt(am_out),
+                "pm_in": fmt(pm_in),
+                "pm_out": fmt(pm_out),
+                "ot_in": None,
+                "ot_out": None,
+            }
+        )
+
+    month_name = start.strftime("%B")
+    return render_template(
+        request,
+        "report.html",
+        {"user": user, "month_name": month_name, "year": year, "days": days},
+    )
 
 # --- Staff & Enrollment Routes ---
 
@@ -583,6 +794,15 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
     face_results = face_engine.process_frame(frame)
     now_ts = time.time()
     results = []
+
+    if recognized_faces:
+        stale_keys = []
+        for k, v in recognized_faces.items():
+            ts = v.get("ts") if isinstance(v, dict) else None
+            if ts is None or (now_ts - float(ts)) > RECOGNITION_STREAK_TIMEOUT_SEC:
+                stale_keys.append(k)
+        for k in stale_keys:
+            recognized_faces.pop(k, None)
     
     for res in face_results:
         x, y, w, h = res.bbox
@@ -606,36 +826,46 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
         # Debug logging for blink detection
         logging.debug(f"Face detection - blink_detected: {res.blink_detected}, bbox: {res.bbox}")
 
-        if label != -1 and distance < LBPH_DISTANCE_THRESHOLD:
+        face_ok = (w >= MIN_FACE_SIZE_PX and h >= MIN_FACE_SIZE_PX)
+        candidate = (label != -1 and face_ok and distance < LBPH_DISTANCE_THRESHOLD)
+
+        cx = x + (w / 2.0)
+        cy = y + (h / 2.0)
+        track_key = (int(cx // 80), int(cy // 80))
+
+        stable = False
+        if candidate:
+            prev = recognized_faces.get(track_key)
+            if isinstance(prev, dict) and prev.get("label") == label and (now_ts - float(prev.get("ts", 0))) <= RECOGNITION_STREAK_TIMEOUT_SEC:
+                streak = int(prev.get("streak", 0)) + 1
+            else:
+                streak = 1
+            recognized_faces[track_key] = {"label": label, "streak": streak, "ts": now_ts, "distance": float(distance)}
+            stable = streak >= RECOGNITION_STREAK_REQUIRED
+        else:
+            recognized_faces.pop(track_key, None)
+
+        if candidate and not stable:
+            result["status"] = "recognized"
+            result["name"] = "PLEASE HOLD STILL"
+
+        if candidate and stable:
             user = db.get(User, label)
             if user:
                 result['name'] = user.name
                 result['status'] = 'recognized'
                 result['user_id'] = user.id
                 result['confidence'] = distance
-                
-                # --- Face Verification Logic ---
-                # This section handles the "liveness" check. A user is considered "verified" if they
-                # have successfully blinked within the `VERIFIED_TTL_SEC` window. This prevents
-                # holding a photo up to the camera to trick the system.
 
-                # Check if the user is already in the verified cache and if the timestamp is still valid.
                 is_currently_verified = face_verification_cache.get(user.id, 0) > (now_ts - VERIFIED_TTL_SEC)
-                
-                # If a blink is detected in the current frame, update the cache with the new timestamp.
+
                 if res.blink_detected:
                     face_verification_cache[user.id] = now_ts
                     result["verified"] = True
-                # If no blink is detected, but the user is still within the valid TTL window, keep them verified.
                 elif is_currently_verified:
                     result["verified"] = True
-                # Otherwise, the user is not verified.
                 else:
                     result["verified"] = False
-        else:
-            # If recognition fails, clear any possibly stale cache
-            if label != -1 and label in recognized_faces:
-                del recognized_faces[label]
         
         results.append(result)
 
@@ -680,7 +910,13 @@ async def api_attendance_record(request: Request, db: Session = Depends(get_db),
         if now_ts - last_verified > VERIFIED_TTL_SEC:
             return JSONResponse({'status': 'error', 'message': 'Liveness verification required. Please look at the camera.'}, status_code=403)
 
-        now = get_now_pht()
+        # --- Cooldown Check ---
+        # Prevents rapid, duplicate login/logout actions from the same user.
+        last_action_time = attendance_cache.get(uid, 0)
+        if now_ts - last_action_time < 60: # 60-second cooldown
+            return JSONResponse({'status': 'error', 'message': 'Please wait a moment before your next action.'}, status_code=429)
+
+        now = get_now()
         today_str = now.strftime("%Y-%m-%d")
         live_set_key = f"attendance:{today_str}:present"
         
@@ -709,6 +945,9 @@ async def api_attendance_record(request: Request, db: Session = Depends(get_db),
         
         else:
             return JSONResponse({'status': 'error', 'message': 'Invalid action'}, status_code=400)
+
+        # Update the cooldown timer
+        attendance_cache[uid] = now_ts
 
         return JSONResponse({'status': 'success', 'message': message})
 
@@ -833,9 +1072,62 @@ async def request_early_report(request: Request, staff_code: str = Form(...), db
     if not user:
         request.state.flash("Invalid Staff ID", "danger")
         return RedirectResponse(url="/staff_portal", status_code=303)
-        
-    # Logic to send report or initiate it
-    request.state.flash(f"Early report request for {user.name} has been sent.", "success")
+
+    if not user.email:
+        request.state.flash("No email address on file for this user.", "danger")
+        return RedirectResponse(url="/staff_portal", status_code=303)
+
+    # --- Report Analytics ---
+    # Calculate summary statistics for the user's recent activity.
+    now = get_now()
+    start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    logs = db.query(Attendance).filter(
+        Attendance.user_id == user.id,
+        Attendance.timestamp >= start_of_month
+    ).order_by(Attendance.timestamp.desc()).all()
+
+    on_time_arrivals = sum(1 for log in logs if log.status in ["On Time", "Present"])
+    late_arrivals = sum(1 for log in logs if log.status in ["Late", "Tardy"])
+    total_arrivals = on_time_arrivals + late_arrivals
+    punctuality_score = (on_time_arrivals / total_arrivals * 100) if total_arrivals > 0 else 100
+
+    # Determine a motivational message based on the score.
+    if punctuality_score >= 95:
+        motivation = "Outstanding! Your commitment to punctuality is truly commendable. Keep up the fantastic work!"
+        motivation_color = "#38A169" # Green
+    elif punctuality_score >= 80:
+        motivation = "Great job! You have a strong record of being on time. Let's aim for a perfect score!"
+        motivation_color = "#3182CE" # Blue
+    else:
+        motivation = "Every day is a new opportunity. Let's focus on making each arrival a timely one. You can do it!"
+        motivation_color = "#DD6B20" # Orange
+
+    # Render the HTML for the email body using the new template.
+    template = templates.get_template("email_report.html")
+    body = template.render({
+        "user": user,
+        "logs": logs[:15], # Show the 15 most recent logs in the table
+        "report_date": now.strftime('%B %d, %Y'),
+        "current_year": now.year,
+        "analytics": {
+            "on_time": on_time_arrivals,
+            "late": late_arrivals,
+            "punctuality_score": f"{punctuality_score:.1f}",
+            "motivation": motivation,
+            "motivation_color": motivation_color
+        }
+    })
+
+    subject = f"Your Attendance Report for {get_now().strftime('%B %Y')}"
+
+    email_sent = send_email(user.email, subject, body)
+
+    if email_sent:
+        request.state.flash(f"Early report request for {user.name} has been sent to {user.email}.", "success")
+    else:
+        request.state.flash("Could not send email. Please check system configuration.", "danger")
+
     return RedirectResponse(url="/staff_portal", status_code=303)
 
 @app.post("/api/reset_faces/{user_id}")
@@ -848,6 +1140,29 @@ async def reset_faces(user_id: int, db: Session = Depends(get_db)):
         os.makedirs(user_dir, exist_ok=True)
         return JSONResponse({'status': 'success', 'message': f'Faces reset for user {user_id}'})
     return JSONResponse({'status': 'error', 'message': 'User directory not found'}, status_code=404)
+
+@app.get("/api/recent_logs")
+async def api_recent_logs(db: Session = Depends(get_db)):
+    """
+    Provides a JSON list of the 10 most recent attendance logs.
+    - Joins with the User table to include the user's name.
+    - Used by the main monitoring page to display a live feed of recent activity.
+    """
+    try:
+        logs = db.query(Attendance, User.name).join(User, Attendance.user_id == User.id).order_by(Attendance.timestamp.desc()).limit(10).all()
+        
+        results = []
+        for log, user_name in logs:
+            results.append({
+                "user_name": user_name,
+                "status": log.status,
+                "timestamp": log.timestamp.isoformat()
+            })
+            
+        return JSONResponse(results)
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 @app.post("/api/chat")
 async def api_chat(request: Request):

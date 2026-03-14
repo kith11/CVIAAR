@@ -50,8 +50,10 @@ class FaceEngine:
         # Simple MediaPipe Face Mesh setup
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
-            max_num_faces=1, refine_landmarks=True,
-            min_detection_confidence=0.5, min_tracking_confidence=0.5
+            max_num_faces=5,
+            refine_landmarks=True,
+            min_detection_confidence=0.7, # Stricter detection
+            min_tracking_confidence=0.5
         )
         
         self.process_interval_ms = process_interval_ms

@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from .models import Attendance, Base
+from .models import Attendance, Base, User
 from .face_engine import FaceEngine
 import uuid
 

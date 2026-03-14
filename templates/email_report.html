@@ -1,0 +1,98 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Attendance Report</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol'; margin: 0; padding: 20px; background-color: #f4f4f4;">
+
+    <table width="100%" border="0" cellspacing="0" cellpadding="0">
+        <tr>
+            <td align="center">
+                <table width="600" border="0" cellspacing="0" cellpadding="0" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); overflow: hidden;">
+                    <!-- Header -->
+                    <tr>
+                        <td style="background-color: #4A5568; color: #ffffff; padding: 20px 30px;">
+                            <h1 style="margin: 0; font-size: 24px;">CVIAAR System</h1>
+                        </td>
+                    </tr>
+                    <!-- Body -->
+                    <tr>
+                        <td style="padding: 30px; color: #333333;">
+                            <h2 style="margin-top: 0; color: #2D3748;">Hi {{ user.name }},</h2>
+                            <p style="line-height: 1.6;">Here is your personalized attendance report for <strong>{{ report_date }}</strong>.</p>
+
+                            <!-- Monthly Snapshot -->
+                            <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 20px; background-color: #F7FAFC; border-radius: 8px; padding: 20px;">
+                                <tr>
+                                    <td colspan="3" style="padding-bottom: 15px; border-bottom: 1px solid #E2E8F0;">
+                                        <h3 style="margin: 0; font-size: 18px; color: #2D3748;">Monthly Snapshot</h3>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td align="center" style="padding-top: 15px;">
+                                        <p style="font-size: 24px; font-weight: bold; color: #38A169; margin: 0;">{{ analytics.on_time }}</p>
+                                        <p style="font-size: 14px; color: #718096; margin: 5px 0 0 0;">On-Time</p>
+                                    </td>
+                                    <td align="center" style="padding-top: 15px;">
+                                        <p style="font-size: 24px; font-weight: bold; color: #DD6B20; margin: 0;">{{ analytics.late }}</p>
+                                        <p style="font-size: 14px; color: #718096; margin: 5px 0 0 0;">Late</p>
+                                    </td>
+                                    <td align="center" style="padding-top: 15px;">
+                                        <p style="font-size: 24px; font-weight: bold; color: #3182CE; margin: 0;">{{ analytics.punctuality_score }}%</p>
+                                        <p style="font-size: 14px; color: #718096; margin: 5px 0 0 0;">Punctuality</p>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td colspan="3" style="padding-top: 20px; text-align: center;">
+                                        <p style="font-style: italic; color: {{ analytics.motivation_color }}; margin: 0;">"{{ analytics.motivation }}"</p>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <!-- Recent Activity -->
+                            <h3 style="margin-top: 30px; font-size: 18px; color: #2D3748;">Recent Activity</h3>
+                            <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 10px; border-collapse: collapse;">
+                                <thead>
+                                    <tr style="background-color: #EDF2F7;">
+                                        <th style="padding: 12px; border-bottom: 2px solid #E2E8F0; text-align: left; color: #4A5568;">Date</th>
+                                        <th style="padding: 12px; border-bottom: 2px solid #E2E8F0; text-align: left; color: #4A5568;">Timestamp</th>
+                                        <th style="padding: 12px; border-bottom: 2px solid #E2E8F0; text-align: left; color: #4A5568;">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for log in logs %}
+                                    <tr style="border-bottom: 1px solid #EDF2F7;">
+                                        <td style="padding: 12px;">{{ log.timestamp.strftime('%Y-%m-%d') }}</td>
+                                        <td style="padding: 12px;">{{ log.timestamp.strftime('%I:%M:%S %p') }}</td>
+                                        <td style="padding: 12px;">
+                                            <span style="padding: 5px 10px; border-radius: 15px; font-size: 12px; color: #ffffff;
+                                                {% if log.status in ['On Time', 'Present'] %} background-color: #38A169; /* Green */
+                                                {% elif log.status in ['Late', 'Tardy'] %} background-color: #DD6B20; /* Orange */
+                                                {% elif log.status == 'Logout' %} background-color: #718096; /* Gray */
+                                                {% else %} background-color: #E53E3E; /* Red */
+                                                {% endif %}
+                                            ">{{ log.status }}</span>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </td>
+                    </tr>
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #F7FAFC; padding: 20px 30px; text-align: center; color: #718096; font-size: 12px;">
+                            <p style="margin: 0;">This is an automated report from the CVIAAR System.</p>
+                            <p style="margin: 5px 0 0 0;">&copy; {{ current_year }} CVIAAR. All rights reserved.</p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+
+</body>
+</html>

@@ -8,6 +8,8 @@ services:
       - ./data:/app/data
     env_file:
       - .env
+    environment:
+      - TZ=Asia/Manila
     dns:
       - 8.8.8.8
       - 8.8.4.4

@@ -284,14 +284,25 @@
                     
                     let html = '';
                     data.forEach(log => {
+                        const date = new Date(log.timestamp);
+                        const timeString = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+                        let color = 'secondary';
+                        if (log.status.toLowerCase().includes('in') || log.status.toLowerCase().includes('on time')) {
+                            color = 'success';
+                        } else if (log.status.toLowerCase().includes('out')) {
+                            color = 'dark';
+                        } else if (log.status.toLowerCase().includes('late')) {
+                            color = 'warning';
+                        }
+
                         html += `
                             <div class="list-group-item border-0 border-bottom p-3">
                                 <div class="d-flex justify-content-between align-items-center">
                                     <div>
-                                        <div class="fw-bold small">${log.name}</div>
-                                        <div class="text-muted smaller" style="font-size: 0.7rem;">${log.time}</div>
+                                        <div class="fw-bold small">${log.user_name}</div>
+                                        <div class="text-muted smaller" style="font-size: 0.7rem;">${timeString}</div>
                                     </div>
-                                    <span class="badge bg-${log.color} bg-opacity-10 text-${log.color} border-0 small">${log.status}</span>
+                                    <span class="badge bg-${color} bg-opacity-10 text-${color} border-0 small">${log.status}</span>
                                 </div>
                             </div>
                         `;
@@ -396,9 +407,6 @@
                 if (data.status === 'success' && data.faces.length > 0) {
                     lastFaces = data.faces;
                     lastFacesTime = Date.now();
-                } else if (Date.now() - lastFacesTime < 1500 && lastFaces.length > 0) {
-                    data.status = 'success';
-                    data.faces = lastFaces;
                 } else {
                     lastFaces = [];
                     currentVerifiedUserId = null;
@@ -453,13 +461,25 @@
                     } else if (mainFace.status === 'recognized') {
                         statusMsg.innerHTML = `HELLO <span class="text-warning fw-bold">${mainFace.name.toUpperCase()}</span> — PLEASE BLINK TO VERIFY`;
                         statusOverlay.style.background = "rgba(255, 193, 7, 0.1)";
+                        // Hide actions if recognized but NOT verified
+                        attendanceActions.classList.add('d-none');
+                        currentVerifiedUserId = null;
+                        currentVerifiedUserName = null;
                     } else {
                         statusMsg.innerHTML = '<span class="text-danger fw-bold">IDENTITY UNKNOWN</span>';
                         statusOverlay.style.background = "rgba(220, 53, 69, 0.2)";
+                        // Hide actions if unknown
+                        attendanceActions.classList.add('d-none');
+                        currentVerifiedUserId = null;
+                        currentVerifiedUserName = null;
                     }
                 } else {
                     statusMsg.innerHTML = 'SCANNING FOR IDENTITY...';
                     statusOverlay.style.background = "rgba(0,0,0,0.5)";
+                    // Hide actions if no faces at all
+                    attendanceActions.classList.add('d-none');
+                    currentVerifiedUserId = null;
+                    currentVerifiedUserName = null;
                 }
             })
             .finally(() => recognizeBusy = false);

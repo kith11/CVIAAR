@@ -44,4 +44,8 @@ class Settings(BaseSettings):
     # Hugging Face API for AI Chatbot
     HF_TOKEN: str | None = None
 
+    # Gmail Credentials for Report Sending
+    MAIL_USERNAME: str | None = None
+    MAIL_APP_PASSWORD: str | None = None
+
 settings = Settings()
