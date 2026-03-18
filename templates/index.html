@@ -60,34 +60,20 @@
                             <div id="blink-icon" class="me-3 d-none">
                                 <i class="bi bi-eye-fill text-success fs-3 animate-blink-success"></i>
                             </div>
-                            <div class="spinner-grow spinner-grow-sm text-white me-2 me-md-3" role="status"></div>
-                            <h5 class="mb-0 fw-bold text-white" id="status-message" style="font-size: 0.9rem; line-height: 1.2;">Initializing system...</h5>
+                            <div class="spinner-grow spinner-grow-sm text-white me-2 me-md-3" id="status-spinner" role="status"></div>
+                            <h5 class="mb-0 fw-bold text-white" id="status-message" style="font-size: 0.9rem; line-height: 1.2;">System Standby</h5>
                         </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Attendance Controls (Below Feed) -->
-        <div id="attendance-actions" class="card mt-4 p-0 d-none border-0 overflow-hidden shadow-sm">
-            <div class="p-4 border-bottom bg-light">
-                <div class="fw-bold small text-uppercase text-muted" style="letter-spacing: 0.05em;">
-                    <i class="bi bi-shield-check me-2 text-success"></i>Identity Verified
-                </div>
-            </div>
-            <div class="card-body p-4">
-                <div class="d-flex flex-column flex-md-row align-items-center justify-content-between gap-4">
-                    <div class="text-center text-md-start">
-                        <h2 class="mb-0 fw-bold text-dark" id="attendance-name">---</h2>
-                        <p class="text-muted small mb-0">Please ensure you have logged out before logging in again in the afternoon.</p>
-                    </div>
-                    <div class="text-center">
-                        <div class="btn-group shadow-sm">
-                            <button id="btn-login" type="button" class="btn btn-primary px-5 py-3 fw-bold border-0" style="background: #198754;">
-                                <i class="bi bi-box-arrow-in-right me-2"></i>Log in
+                        <div id="camera-controls">
+                            <button id="btn-activate-login" class="btn btn-success btn-sm fw-bold px-3 me-2">
+                                <i class="bi bi-person-check-fill me-1"></i>LOG IN
                             </button>
-                            <button id="btn-logout" type="button" class="btn btn-outline-dark px-5 py-3 fw-bold">
-                                <i class="bi bi-box-arrow-right me-2"></i>Log out
+                            <button id="btn-activate-logout" class="btn btn-outline-light btn-sm fw-bold px-3">
+                                <i class="bi bi-box-arrow-right me-1"></i>LOG OUT
+                            </button>
+                        </div>
+                        <div id="active-controls" class="d-none">
+                            <button id="btn-cancel-session" class="btn btn-danger btn-sm fw-bold px-3">
+                                <i class="bi bi-x-circle me-1"></i>CANCEL
                             </button>
                         </div>
                     </div>
@@ -180,7 +166,16 @@
         50% { transform: scale(1.2); opacity: 1; }
         100% { transform: scale(1); opacity: 0; }
     }
-    .animate-blink-success { animation: blink-success 0.8s ease-out forwards; }
+        /* Standby Overlay UI Enhancements */
+        #camera-controls .btn {
+            border-radius: 20px;
+            letter-spacing: 0.05em;
+            transition: all 0.2s;
+        }
+        #camera-controls .btn:hover {
+            transform: scale(1.05);
+        }
+        .animate-blink-success { animation: blink-success 0.8s ease-out forwards; }
 
     /* Standby overlay with floating names */
     .standby-overlay {
@@ -328,25 +323,53 @@
         const overlayCtx = overlayCanvas.getContext('2d');
         const captureCanvas = document.getElementById('capture-canvas');
         const captureCtx = captureCanvas.getContext('2d');
-        const statusMsg = document.getElementById('status-message');
         const statusOverlay = document.getElementById('status-overlay');
-        const attendanceActions = document.getElementById('attendance-actions');
-        const attendanceName = document.getElementById('attendance-name');
-        const attendanceMessage = document.getElementById('attendance-message');
-        const btnLogin = document.getElementById('btn-login');
-        const btnLogout = document.getElementById('btn-logout');
+        const statusMsg = document.getElementById('status-message');
         const blinkIcon = document.getElementById('blink-icon');
+        const recentLogsList = document.getElementById('recent-logs-list');
 
         const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(window.location.hostname);
         let cameraStream = null;
         let processIntervalId = null;
-        let recognizeBusy = false;
+        let isRecognizing = false;
         let lastFaces = [];
         let lastFacesTime = 0;
         let currentVerifiedUserId = null;
         let currentVerifiedUserName = null;
+        let isCameraActive = false;
+        let currentActionType = null; // 'login' or 'logout'
+
+        const btnActivateLogin = document.getElementById('btn-activate-login');
+        const btnActivateLogout = document.getElementById('btn-activate-logout');
+        const btnCancelSession = document.getElementById('btn-cancel-session');
+        const cameraControls = document.getElementById('camera-controls');
+        const activeControls = document.getElementById('active-controls');
+        const statusSpinner = document.getElementById('status-spinner');
+
+        let sessionTimeoutId = null;
+        const SESSION_TIMEOUT_MS = 30000; // 30 seconds limit
+
+        async function setCameraState(active) {
+            try {
+                const response = await fetch('/api/camera/state', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ active: active })
+                });
+                const data = await response.json();
+                isCameraActive = active;
+                return data;
+            } catch (err) {
+                console.error("Failed to sync camera state:", err);
+                return null;
+            }
+        }
 
         function stopCamera() {
+            if (sessionTimeoutId) {
+                clearTimeout(sessionTimeoutId);
+                sessionTimeoutId = null;
+            }
             if (processIntervalId) {
                 clearInterval(processIntervalId);
                 processIntervalId = null;
@@ -358,11 +381,17 @@
             if (video) {
                 video.srcObject = null;
             }
-            statusMsg.textContent = "Standby mode";
+            overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            statusMsg.textContent = "System Standby";
             statusOverlay.style.background = "rgba(0,0,0,0.8)";
+            cameraControls.classList.remove('d-none');
+            activeControls.classList.add('d-none');
+            statusSpinner.classList.add('d-none');
+            setCameraState(false);
         }
 
-        function startCamera() {
+        async function startCamera(actionType) {
+            currentActionType = actionType;
             if (!isLocal || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 statusMsg.textContent = "System in remote standby";
                 return;
@@ -370,28 +399,57 @@
             if (cameraStream) {
                 return; // already running
             }
+
+            cameraControls.classList.add('d-none');
+            activeControls.classList.remove('d-none');
+            statusSpinner.classList.remove('d-none');
+            statusMsg.textContent = "Waking up camera...";
+
+            await setCameraState(true);
+            const capturedActionType = actionType; // Closure
+
+            // Set session timeout
+            sessionTimeoutId = setTimeout(() => {
+                showNotification('Session Timeout', 'No biometric signature detected in time.', false);
+                stopCamera();
+            }, SESSION_TIMEOUT_MS);
+
             navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: { ideal: 15, max: 15 } } })
                 .then(stream => {
+                    // Check if we should still be running
+                    if (currentActionType !== capturedActionType) {
+                        stream.getTracks().forEach(t => t.stop());
+                        return;
+                    }
                     cameraStream = stream;
                     video.srcObject = stream;
                     statusMsg.textContent = "Scanning for identity...";
                     statusOverlay.style.background = "rgba(0,0,0,0.5)";
-                    processIntervalId = setInterval(processFrame, 150);
+                    processIntervalId = setInterval(processFrame, 200); // 5 FPS
                 })
                 .catch(err => {
                     console.error("Camera error:", err);
-                    const name = (err && err.name) ? err.name : 'Error';
-                    const msg = (err && err.message) ? err.message : '';
-                    statusMsg.textContent = `Camera error: ${name}${msg ? ' — ' + msg : ''}`;
-                    statusOverlay.classList.add('bg-danger');
+                    statusMsg.textContent = "Camera error. Please check permissions.";
+                    cameraControls.classList.remove('d-none');
+                    setCameraState(false);
                 });
         }
 
-        // Start camera immediately on load (for local kiosk)
-        startCamera();
+        btnActivateLogin.addEventListener('click', () => startCamera('login'));
+        btnActivateLogout.addEventListener('click', () => startCamera('logout'));
+        btnCancelSession.addEventListener('click', () => stopCamera());
+
+        // Start in standby
+        stopCamera();
+
+        let lastRequestTime = 0;
+        const requestInterval = 200; // 5 FPS for consistent rate-limiting
 
         function processFrame() {
-            if (recognizeBusy || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+            if (isRecognizing || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+            const now = Date.now();
+            if (now - lastRequestTime < requestInterval) return;
 
             overlayCanvas.width = video.videoWidth;
             overlayCanvas.height = video.videoHeight;
@@ -400,14 +458,24 @@
             captureCtx.drawImage(video, 0, 0);
             const dataURL = captureCanvas.toDataURL('image/jpeg', 0.7); 
 
-            recognizeBusy = true;
+            isRecognizing = true;
+            lastRequestTime = now;
 
             fetch('/api/recognize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ image: dataURL })
             })
-            .then(response => response.json())
+            .then(async response => {
+                if (response.status === 429) {
+                    // Rate limited - wait longer before next request
+                    console.warn("Rate limited by server. Increasing interval.");
+                    await new Promise(r => setTimeout(r, 1000));
+                    return { status: 'idle' };
+                }
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                return response.json();
+            })
             .then(data => {
                 overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
                 
@@ -418,7 +486,6 @@
                     lastFaces = [];
                     currentVerifiedUserId = null;
                     currentVerifiedUserName = null;
-                    attendanceActions.classList.add('d-none');
                 }
 
                 if (data.status === 'success' && data.faces.length > 0) {
@@ -430,66 +497,59 @@
                         setTimeout(() => blinkIcon.classList.add('d-none'), 800);
                     }
 
-                    overlayCtx.save();
-                    overlayCtx.scale(-1, 1);
-                    overlayCtx.translate(-overlayCanvas.width, 0);
+                    // Auto-record if verified and logic is in manual trigger mode
+                    if (mainFace.verified && mainFace.user_id && currentActionType) {
+                        const action = currentActionType;
+                        currentActionType = null; // Clear immediately to prevent duplicate loops (409 Conflict)
+                        recordAttendance(mainFace.user_id, action);
+                    }
 
                     data.faces.forEach(face => {
                         const [x, y, w, h] = face.rect;
                         overlayCtx.lineWidth = 4;
                         overlayCtx.strokeStyle = face.verified ? '#198754' : (face.status === 'recognized' ? '#ffc107' : '#dc3545');
                         overlayCtx.strokeRect(x, y, w, h);
-                        
-                        // Label background
-                        overlayCtx.fillStyle = face.verified ? 'rgba(25, 135, 84, 0.9)' : (face.status === 'recognized' ? 'rgba(255, 193, 7, 0.9)' : 'rgba(220, 53, 69, 0.9)');
-                        overlayCtx.fillRect(x, y - 35, w, 35);
 
-                        // Label text (mirrored back to read normally)
-                        overlayCtx.save();
-                        overlayCtx.scale(-1, 1);
-                        overlayCtx.translate(-(x * 2 + w), 0);
-                        overlayCtx.font = "bold 18px Inter, sans-serif";
-                        overlayCtx.fillStyle = "#fff";
-                        overlayCtx.textAlign = "center";
-                        overlayCtx.fillText(face.name.toUpperCase(), x + w/2, y - 12);
-                        overlayCtx.restore();
-                    });
-                    overlayCtx.restore();
-
-                    if (mainFace.verified) {
-                        statusMsg.innerHTML = `<span class="text-success fw-bold">IDENTITY VERIFIED:</span> ${mainFace.name.toUpperCase()}`;
-                        statusOverlay.style.background = "rgba(25, 135, 84, 0.2)";
-                        currentVerifiedUserId = mainFace.user_id || null;
-                        currentVerifiedUserName = mainFace.name || null;
-                        if (currentVerifiedUserId && currentVerifiedUserName && attendanceActions) {
-                            attendanceName.textContent = currentVerifiedUserName;
-                            attendanceActions.classList.remove('d-none');
+                        // Manual trigger instructions
+                        if (currentActionType) {
+                            if (!face.verified && face.status === 'recognized') {
+                                statusMsg.textContent = "Please BLINK to verify liveness";
+                            } else if (face.status !== 'recognized') {
+                                statusMsg.textContent = "Face not recognized. Please center your face.";
+                            }
                         }
-                    } else if (mainFace.status === 'recognized') {
-                        statusMsg.innerHTML = `HELLO <span class="text-warning fw-bold">${mainFace.name.toUpperCase()}</span> — PLEASE BLINK TO VERIFY`;
-                        statusOverlay.style.background = "rgba(255, 193, 7, 0.1)";
-                        // Hide actions if recognized but NOT verified
-                        attendanceActions.classList.add('d-none');
-                        currentVerifiedUserId = null;
-                        currentVerifiedUserName = null;
-                    } else {
-                        statusMsg.innerHTML = '<span class="text-danger fw-bold">IDENTITY UNKNOWN</span>';
-                        statusOverlay.style.background = "rgba(220, 53, 69, 0.2)";
-                        // Hide actions if unknown
-                        attendanceActions.classList.add('d-none');
-                        currentVerifiedUserId = null;
-                        currentVerifiedUserName = null;
-                    }
+                    });
+                } else if (data.status === 'idle') {
+                    statusMsg.textContent = "System Idle";
                 } else {
-                    statusMsg.innerHTML = 'SCANNING FOR IDENTITY...';
-                    statusOverlay.style.background = "rgba(0,0,0,0.5)";
-                    // Hide actions if no faces at all
-                    attendanceActions.classList.add('d-none');
-                    currentVerifiedUserId = null;
-                    currentVerifiedUserName = null;
+                    statusMsg.textContent = "Scanning for identity...";
                 }
             })
-            .finally(() => recognizeBusy = false);
+            .catch(err => {
+                console.error("Recognition error:", err);
+                statusMsg.textContent = "Network error. Retrying...";
+            })
+            .finally(() => {
+                isRecognizing = false;
+            });
+        }
+
+        function recordAttendance(userId, action) {
+            statusMsg.textContent = "Verifying biometric signature...";
+            postJson('/api/attendance/record', { user_id: userId, action: action })
+                .then(res => {
+                    if (res.status === 'success') {
+                        showNotification(action === 'login' ? 'Log In Successful' : 'Log Out Successful', res.message);
+                        fetchRecentLogs();
+                        setTimeout(stopCamera, 2000); // Return to standby after success
+                    } else {
+                        showNotification('Authentication Error', res.message || 'Error recording attendance.', false);
+                        currentActionType = action; // Retry on next frame
+                    }
+                })
+                .catch(() => {
+                    showNotification('System Error', 'Unable to connect to server.', false);
+                });
         }
 
         // --- Attendance action handlers ---
@@ -515,59 +575,24 @@
             }).then(r => r.json());
         }
 
-        if (btnLogin) {
-            btnLogin.addEventListener('click', () => {
-                if (!currentVerifiedUserId) return;
-                
-                btnLogin.disabled = true;
-                btnLogout.disabled = true;
-                
-                postJson('/api/attendance/record', { user_id: currentVerifiedUserId, action: 'login' })
-                    .then(res => {
-                        if (res.status === 'success') {
-                            showNotification('Log In Successful', res.message || `Welcome, ${currentVerifiedUserName}!`);
-                            // Hide actions after success to prevent double submission
-                            attendanceActions.classList.add('d-none');
-                            fetchRecentLogs(); // Refresh logs immediately
-                        } else {
-                            showNotification('Log In Failed', res.message || 'Error recording attendance.', false);
-                        }
-                    })
-                    .catch(() => {
-                        showNotification('System Error', 'Unable to connect to server.', false);
-                    })
-                    .finally(() => {
-                        btnLogin.disabled = false;
-                        btnLogout.disabled = false;
-                    });
-            });
-        }
-
-        if (btnLogout) {
-            btnLogout.addEventListener('click', () => {
-                if (!currentVerifiedUserId) return;
-
-                btnLogin.disabled = true;
-                btnLogout.disabled = true;
-
-                postJson('/api/attendance/record', { user_id: currentVerifiedUserId, action: 'logout' })
-                    .then(res => {
-                        if (res.status === 'success') {
-                            showNotification('Log Out Successful', res.message || `Goodbye, ${currentVerifiedUserName}!`);
-                            attendanceActions.classList.add('d-none');
-                            fetchRecentLogs();
-                        } else {
-                            showNotification('Log Out Failed', res.message || 'Error recording attendance.', false);
-                        }
-                    })
-                    .catch(() => {
-                        showNotification('System Error', 'Unable to connect to server.', false);
-                    })
-                    .finally(() => {
-                        btnLogin.disabled = false;
-                        btnLogout.disabled = false;
-                    });
-            });
+        function recordAttendance(userId, action) {
+            statusMsg.textContent = "Verifying biometric signature...";
+            postJson('/api/attendance/record', { user_id: userId, action: action })
+                .then(res => {
+                    if (res.status === 'success') {
+                        showNotification(action === 'login' ? 'Log In Successful' : 'Log Out Successful', res.message);
+                        fetchRecentLogs();
+                        setTimeout(stopCamera, 2000); // Back to standby
+                    } else {
+                        showNotification('Authentication Error', res.message || 'Error recording attendance.', false);
+                        // Revert to standby after failure so system doesn't get stuck
+                        setTimeout(stopCamera, 3000);
+                    }
+                })
+                .catch(() => {
+                    showNotification('System Error', 'Unable to connect to server.', false);
+                    setTimeout(stopCamera, 3000);
+                });
         }
 
         // --- Standby / floating research names ---
@@ -575,17 +600,17 @@
         const researchMembers = [
             "Margarette G. Biro (Leader)",
             "Irish Jane N. Yungco (Co-Leader)",
-            "Sarah Jean M. Gonzales",
             "Quirstine Ucel G. Polancos",
-            "Melet L. Avenido",
-            "Rowie Joy Maurillo",
-            "Melvin M. Singson",
-            "Sheena Saraum",
-            "Flora Mae Maratas",
+            "John Keith A. Barrientos",
+            "Sarah Jean M. Gonzales",
             "Jason G. Barrientos",
             "Rian Kent D. Castro",
+            "Rowie Joy Maurillo",
+            "Melvin M. Singson",
+            "Flora Mae Maratas",
+            "Melet L. Avenido",
             "John Marc Rusia",
-            "John Keith A. Barrientos"
+            "Sheena Saraum",
         ];
 
         const standbyOverlay = document.getElementById('standby-overlay');

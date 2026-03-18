@@ -19,8 +19,8 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
-from app import app, db  # noqa: E402
-from modules.models import Attendance, AttendanceEdit, ExcuseNote, User  # noqa: E402
+from app import SessionLocal
+from modules.models import Attendance, AttendanceEdit, ExcuseNote, User
 
 
 def _dt_at(date: datetime, hhmm: str) -> datetime:
@@ -30,18 +30,19 @@ def _dt_at(date: datetime, hhmm: str) -> datetime:
 
 def seed(days: int, reset: bool, seed_value: int, device_id: str) -> None:
     rng = random.Random(seed_value)
+    db = SessionLocal()
 
-    with app.app_context():
-        users = User.query.order_by(User.id.asc()).all()
+    try:
+        users = db.query(User).order_by(User.id.asc()).all()
         if not users:
             print("No users found. Seed users first.")
             return
 
         if reset:
-            AttendanceEdit.query.delete()
-            ExcuseNote.query.delete()
-            Attendance.query.delete()
-            db.session.commit()
+            db.query(AttendanceEdit).delete()
+            db.query(ExcuseNote).delete()
+            db.query(Attendance).delete()
+            db.commit()
 
         # Make sure there's enough historical coverage for analytics
         today = datetime.now()
@@ -53,134 +54,105 @@ def seed(days: int, reset: bool, seed_value: int, device_id: str) -> None:
 
         # Pick a few "risk" users (more late/absent) to populate the risk table
         risk_ids = {u.id for u in rng.sample(users, k=min(3, len(users)))}
+        
+        # New: Define behavioral personas for more realistic patterns
+        # 1. "The Early Bird" - always 15-30 mins early
+        # 2. "The Consistent Professional" - arrives +/- 5 mins of schedule
+        # 3. "The Late Starter" - consistently 5-15 mins late
+        # 4. "The Session Hopper" - multiple logins/logouts per day
+        personas = {}
+        for i, u in enumerate(users):
+            if i % 4 == 0: personas[u.id] = "early_bird"
+            elif i % 4 == 1: personas[u.id] = "consistent"
+            elif i % 4 == 2: personas[u.id] = "late_starter"
+            else: personas[u.id] = "hopper"
 
         for d in range(days):
             day = start_day + timedelta(days=d)
-            # Mostly weekdays
-            if day.weekday() >= 5 and rng.random() < 0.85:
+            # Mostly weekdays, but some weekend activity for "hoppers"
+            is_weekend = day.weekday() >= 5
+            if is_weekend and rng.random() < 0.7:
                 continue
 
             for u in users:
+                persona = personas.get(u.id, "consistent")
+                
+                # Weekend skip for non-hoppers
+                if is_weekend and persona != "hopper" and rng.random() < 0.95:
+                    continue
+
                 # Skip if already has an arrival record that day (idempotent-ish)
                 day_start = datetime(day.year, day.month, day.day, 0, 0, 0)
                 day_end = day_start + timedelta(days=1)
                 existing = (
-                    Attendance.query.filter(Attendance.user_id == u.id)
+                    db.query(Attendance).filter(Attendance.user_id == u.id)
                     .filter(Attendance.timestamp >= day_start, Attendance.timestamp < day_end)
                     .first()
                 )
                 if existing and not reset:
                     continue
 
-                sched_start = u.schedule_start or "06:00"
+                sched_start = u.schedule_start or "08:00"
+                sched_end = u.schedule_end or "17:00"
 
-                # Rates
-                base_absent = 0.04
-                base_excused = 0.03
-                base_late = 0.14
-                if u.id in risk_ids:
-                    base_absent = 0.12
-                    base_late = 0.35
+                # Arrival logic based on persona
+                if persona == "early_bird":
+                    offset = rng.randint(-30, -10)
+                    status = "On Time"
+                elif persona == "late_starter":
+                    offset = rng.randint(5, 20)
+                    status = "Late"
+                elif persona == "hopper":
+                    offset = rng.randint(-15, 15)
+                    status = "On Time" if offset <= 0 else "Late"
+                else: # consistent
+                    offset = rng.randint(-5, 5)
+                    status = "On Time"
 
-                roll = rng.random()
+                # Override for risk users
+                if u.id in risk_ids and rng.random() < 0.4:
+                    offset = rng.randint(30, 180)
+                    status = "Late"
 
-                if roll < base_absent:
-                    ts = _dt_at(day, sched_start) + timedelta(minutes=rng.randint(0, 30))
-                    rec = Attendance(
-                        user_id=u.id,
-                        timestamp=ts,
-                        status="Absent",
-                        notes="Auto-generated dummy record",
-                        device_id=device_id,
-                    )
-                    db.session.add(rec)
-                    db.session.flush()
-                    created_att += 1
-
-                    # Sometimes attach an excuse note (for admin features)
-                    if rng.random() < 0.35:
-                        note = ExcuseNote(
-                            attendance_id=rec.id,
-                            note="Seeded excuse note for demo purposes.",
-                            created_by="system",
-                            created_at=ts + timedelta(minutes=5),
-                        )
-                        db.session.add(note)
-                        created_excuses += 1
+                # Random absenteeism
+                if rng.random() < (0.15 if u.id in risk_ids else 0.02):
                     continue
 
-                if roll < base_absent + base_excused:
-                    ts = _dt_at(day, sched_start) + timedelta(minutes=rng.randint(0, 20))
-                    rec = Attendance(
-                        user_id=u.id,
-                        timestamp=ts,
-                        status="Excused",
-                        notes="Seeded excused record",
-                        device_id=device_id,
-                    )
-                    db.session.add(rec)
-                    created_att += 1
-                    continue
-
-                # Arrival
-                is_late = rng.random() < base_late
-                if is_late:
-                    late_min = rng.randint(10, 120)
-                    ts = _dt_at(day, sched_start) + timedelta(minutes=late_min)
-                    status = rng.choice(["Late", "Tardy"])
-                else:
-                    ontime_min = rng.randint(-10, 40)
-                    ts = _dt_at(day, sched_start) + timedelta(minutes=ontime_min)
-                    status = rng.choice(["On Time", "Present"])
-
+                ts = _dt_at(day, sched_start) + timedelta(minutes=offset)
                 rec = Attendance(
                     user_id=u.id,
                     timestamp=ts,
                     status=status,
-                    notes=None,
+                    notes=f"Persona: {persona}",
                     device_id=device_id,
                 )
-                db.session.add(rec)
-                db.session.flush()
+                db.add(rec)
                 created_att += 1
 
-                # Logout record for most arrivals
-                if rng.random() < 0.92:
-                    sched_end = u.schedule_end or "19:00"
-                    logout_ts = _dt_at(day, sched_end) + timedelta(minutes=rng.randint(-15, 30))
-                    db.session.add(
-                        Attendance(
-                            user_id=u.id,
-                            timestamp=logout_ts,
-                            status="Logout",
-                            notes=None,
-                            device_id=device_id,
-                        )
-                    )
-                    created_att += 1
+                # Hopper persona: Multiple sessions
+                if persona == "hopper" and rng.random() < 0.6:
+                    # Mid-day logout/login
+                    mid_logout = ts + timedelta(hours=rng.randint(2, 4))
+                    mid_login = mid_logout + timedelta(minutes=rng.randint(30, 90))
+                    db.add(Attendance(user_id=u.id, timestamp=mid_logout, status="Logout", device_id=device_id))
+                    db.add(Attendance(user_id=u.id, timestamp=mid_login, status="Present", device_id=device_id))
+                    created_att += 2
 
-                # Occasionally create an edit record (e.g., admin corrected Late -> On Time)
-                if rec.status in ("Late", "Tardy") and rng.random() < 0.08:
-                    edit = AttendanceEdit(
-                        attendance_id=rec.id,
-                        previous_status=rec.status,
-                        new_status="On Time",
-                        previous_notes=rec.notes,
-                        new_notes="Seeded correction for demo.",
-                        edited_by="Admin Demo",
-                        edited_at=rec.timestamp + timedelta(hours=2),
-                    )
-                    db.session.add(edit)
-                    created_edits += 1
-                    rec.status = "On Time"
+                # Final Logout
+                logout_offset = rng.randint(-10, 45)
+                logout_ts = _dt_at(day, sched_end) + timedelta(minutes=logout_offset)
+                db.add(Attendance(user_id=u.id, timestamp=logout_ts, status="Logout", device_id=device_id))
+                created_att += 1
 
-        db.session.commit()
+        db.commit()
 
         print("Seed complete.")
         print(f"Users: {len(users)}")
         print(f"Attendance records created: {created_att}")
         print(f"Attendance edits created: {created_edits}")
         print(f"Excuse notes created: {created_excuses}")
+    finally:
+        db.close()
 
 
 def main() -> None:

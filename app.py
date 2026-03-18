@@ -1,6 +1,23 @@
 import os
 import sys
-import cv2
+import logging
+
+# Configure logging early
+logging.basicConfig(level=logging.INFO)
+
+# Conditional heavy imports based on APP_ROLE to allow scripts to run without full dependencies
+APP_ROLE = os.environ.get("APP_ROLE", "KIOSK")
+logging.info(f"APP_ROLE detected: {APP_ROLE}")
+
+if APP_ROLE == "ADMIN_DASHBOARD":
+    cv2 = None
+else:
+    try:
+        import cv2
+    except ImportError:
+        logging.warning("OpenCV (cv2) not found. Camera features will be disabled.")
+        cv2 = None
+
 import time
 import threading
 import base64
@@ -13,7 +30,8 @@ import smtplib
 import traceback
 import json
 import asyncio
-from typing import Optional, List
+import uuid
+from typing import Optional, List, Any
 from datetime import datetime, timedelta
 from calendar import monthrange
 from email.mime.text import MIMEText
@@ -26,14 +44,33 @@ from cachetools import TTLCache
 # --- Caching --- #
 # In-memory cache with a 5-minute TTL and max size of 100 entries
 analytics_cache = TTLCache(maxsize=100, ttl=300)
+risk_cache = TTLCache(maxsize=1, ttl=3600) # Cache for 1 hour
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy import create_engine, text, select, func
 from sqlalchemy.orm import sessionmaker, Session
-import numpy as np
-from upstash_redis import Redis
+
+# Conditional numpy import for lighter script runs
+if APP_ROLE != "ADMIN_DASHBOARD":
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+else:
+    np = None
+
+# Conditional redis imports for lighter script runs
+try:
+    from upstash_redis import Redis as UpstashRedis
+except ImportError:
+    UpstashRedis = None
+
+try:
+    import redis as local_redis
+except ImportError:
+    local_redis = None
 
 from config import settings
 from modules.models import Base, User, Attendance, AttendanceEdit, ExcuseNote
@@ -100,6 +137,51 @@ if getattr(sys, "frozen", False):
 else:
     basedir = os.path.abspath(os.path.dirname(__file__))
 
+# --- Instance Lifecycle Management ---
+# To prevent multiple instances of the application from running concurrently,
+# we use a PID file. If a PID file already exists, we check if the process is still running.
+PID_FILE = os.path.join(basedir, "data", "app.pid")
+
+def manage_instance_lifecycle():
+    # Only manage PID if we are in the main worker process, not the reloader or a CLI script
+    if os.environ.get("UVICORN_INTERACTIVE") == "true" or \
+       os.environ.get("UVICORN_RELOADER_PROCESS") == "true" or \
+       os.environ.get("APP_ROLE") == "ADMIN_DASHBOARD":
+        return
+
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE, "r") as f:
+                content = f.read().strip()
+                if not content:
+                    raise ValueError("Empty PID file")
+                old_pid = int(content)
+            
+            # Check if the process is still running
+            try:
+                os.kill(old_pid, 0)
+                logging.error(f"Another instance of the application is already running (PID: {old_pid}). Exiting.")
+                sys.exit(1)
+            except OSError:
+                # Process is not running, we can safely overwrite the PID file
+                logging.info(f"Found orphaned PID file for PID {old_pid}. Overwriting.")
+        except (ValueError, IOError, PermissionError) as e:
+            logging.warning(f"Could not read PID file: {e}. Overwriting.")
+
+    try:
+        os.makedirs(os.path.dirname(PID_FILE), exist_ok=True)
+        with open(PID_FILE, "w") as f:
+            f.write(str(os.getpid()))
+        
+        # Ensure PID file is removed on exit
+        import atexit
+        atexit.register(lambda: os.path.exists(PID_FILE) and os.remove(PID_FILE))
+        logging.info(f"PID file created at {PID_FILE} (PID: {os.getpid()})")
+    except Exception as e:
+        logging.error(f"Failed to create PID file: {e}")
+
+manage_instance_lifecycle()
+
 os.makedirs(os.path.join(basedir, "static"), exist_ok=True)
 os.makedirs(os.path.join(basedir, "templates"), exist_ok=True)
 os.makedirs(os.path.join(basedir, "data", "faces"), exist_ok=True)
@@ -113,7 +195,6 @@ templates = Jinja2Templates(directory=os.path.join(basedir, "templates"))
 # The application uses SQLAlchemy for database interaction. It supports both a local SQLite
 # database for offline operation (kiosk mode) and a remote PostgreSQL database (e.g., Supabase)
 # for a centralized admin dashboard.
-APP_ROLE = os.getenv("APP_ROLE", "LOCAL_KIOSK")
 DEVICE_ID = os.getenv("DEVICE_ID", "local-device")
 
 # Determine the database URL based on the application's role and environment.
@@ -162,14 +243,24 @@ def get_db():
 # --- Redis Client for Real-Time Data ---
 # Upstash Redis is used as a real-time, low-latency data layer for broadcasting live status
 # updates (e.g., who is currently verified) between the kiosk and viewer clients.
+# If Upstash is not configured, we fall back to a standard local Redis.
 redis = None
-if settings.UPSTASH_REDIS_URL and settings.UPSTASH_REDIS_TOKEN:
+if settings.UPSTASH_REDIS_URL and settings.UPSTASH_REDIS_TOKEN and UpstashRedis:
     try:
-        redis = Redis(url=settings.UPSTASH_REDIS_URL, token=settings.UPSTASH_REDIS_TOKEN)
+        redis = UpstashRedis(url=settings.UPSTASH_REDIS_URL, token=settings.UPSTASH_REDIS_TOKEN)
         redis.ping() # Test connection
         logging.info("Successfully connected to Upstash Redis.")
     except Exception as e:
         logging.error(f"Error connecting to Upstash Redis: {e}")
+        redis = None
+
+if not redis and settings.REDIS_URL and local_redis:
+    try:
+        redis = local_redis.from_url(settings.REDIS_URL, decode_responses=True)
+        redis.ping()
+        logging.info(f"Successfully connected to local Redis at {settings.REDIS_URL}")
+    except Exception as e:
+        logging.error(f"Error connecting to local Redis: {e}")
         redis = None
 
 def get_redis():
@@ -252,6 +343,10 @@ def get_now():
     """Returns the current time in the system's local timezone."""
     return datetime.now().astimezone()
 
+# --- Real-Time Global State ---
+camera_active = False
+current_session_user = None
+
 # --- Real-Time Video Streaming ---
 def generate_frames():
     """
@@ -259,28 +354,31 @@ def generate_frames():
     It continuously fetches frames from the camera, encodes them as JPEGs, and yields
     them in a format suitable for streaming to a web browser.
     """
-    if not camera:
-        # If no camera is found, return a placeholder image with an error message.
-        blank = np.zeros((480, 640, 3), np.uint8)
-        cv2.putText(blank, "No Camera Found", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-        ret, buffer = cv2.imencode('.jpg', blank)
-        frame_bytes = buffer.tobytes()
-        while True:
+    global camera_active
+    
+    while True:
+        if not camera or not camera_active:
+            # If camera is inactive, return a dark placeholder frame
+            blank = np.zeros((480, 640, 3), np.uint8)
+            cv2.putText(blank, "CAMERA STANDBY", (180, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (100, 100, 100), 2)
+            ret, buffer = cv2.imencode('.jpg', blank)
+            frame_bytes = buffer.tobytes()
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            time.sleep(1)
+            time.sleep(0.5)
+            continue
 
-    while True:
         frame = camera.get_frame()
         if frame is None:
-            continue # Skip if frame is not available
+            time.sleep(0.1)
+            continue
         
         ret, buffer = cv2.imencode('.jpg', frame)
         frame_bytes = buffer.tobytes()
 
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-        time.sleep(1 / settings.CAMERA_FPS) # Control frame rate
+        time.sleep(1 / settings.CAMERA_FPS)
 
 def send_email(to_email: str, subject: str, body: str) -> bool:
     """Sends an email using the configured Gmail account."""
@@ -454,6 +552,12 @@ async def audit_logs(request: Request, db: Session = Depends(get_db)):
         logging.error(f"Error in audit logs: {e}")
         logging.error(traceback.format_exc())
         return HTMLResponse(content="Internal Server Error: See logs for details.", status_code=500)
+
+@app.get("/api/users")
+async def api_get_users(db: Session = Depends(get_db)):
+    """API endpoint to fetch all users for selection lists."""
+    users = db.query(User).all()
+    return [{"id": u.id, "name": u.name} for u in users]
 
 @app.get("/advanced_analytics", response_class=HTMLResponse)
 async def advanced_analytics(request: Request, db: Session = Depends(get_db)):
@@ -715,13 +819,15 @@ async def staff_portal_get(request: Request):
     return render_template(request, "staff_portal.html", {"user": None, "logs": []})
 
 @app.post("/staff_portal", response_class=HTMLResponse)
-async def staff_portal_post(request: Request, staff_code: str = Form(...), db: Session = Depends(get_db)):
+async def staff_portal_post(request: Request, 
+                            user_id: int = Form(...),
+                            db: Session = Depends(get_db)):
     """
-    Handles the staff ID submission and displays the user's attendance records.
+    Handles the user selection and displays the user's attendance records.
     """
-    user = db.query(User).filter(User.staff_code == staff_code).first()
+    user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        return render_template(request, "staff_portal.html", {"user": None, "logs": [], "error": "Invalid Staff ID"})
+        return render_template(request, "staff_portal.html", {"user": None, "logs": [], "error": "Invalid User Selection"})
     
     logs = db.query(Attendance).filter(Attendance.user_id == user.id).order_by(Attendance.timestamp.desc()).limit(30).all()
     return render_template(request, "staff_portal.html", {"user": user, "logs": logs})
@@ -756,47 +862,59 @@ async def analytics_endpoint(db: Session = Depends(get_db)):
     Provides a JSON summary of attendance statistics for all users.
     Used by the admin dashboard to populate the main analytics table.
     """
-    analytics = AnalyticsEngine(db)
-    
-    # Get all users
-    users = db.query(User).all()
-    
-    # For each user, calculate their attendance stats
-    user_stats = []
-    for user in users:
-        # Count different attendance statuses for this user
-        present_count = db.query(Attendance).filter(
-            Attendance.user_id == user.id,
-            Attendance.status.in_(["Present", "On Time"])
-        ).count()
+    try:
+        analytics = AnalyticsEngine(db)
         
-        tardy_count = db.query(Attendance).filter(
-            Attendance.user_id == user.id,
-            Attendance.status.in_(["Late", "Tardy"])
-        ).count()
+        # Get all users
+        users = db.query(User).all()
         
-        absent_count = db.query(Attendance).filter(
-            Attendance.user_id == user.id,
-            Attendance.status == "Absent"
-        ).count()
+        # For each user, calculate their attendance stats (last 7 days for consistency with trends)
+        user_stats = []
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=7)
+        start_dt = datetime.combine(start_date, datetime.min.time())
+
+        for user in users:
+            present_count = db.query(Attendance).filter(
+                Attendance.user_id == user.id,
+                Attendance.status.in_(["Present", "On Time"]),
+                Attendance.timestamp >= start_dt
+            ).count()
+            
+            tardy_count = db.query(Attendance).filter(
+                Attendance.user_id == user.id,
+                Attendance.status.in_(["Late", "Tardy"]),
+                Attendance.timestamp >= start_dt
+            ).count()
+            
+            absent_count = db.query(Attendance).filter(
+                Attendance.user_id == user.id,
+                Attendance.status == "Absent",
+                Attendance.timestamp >= start_dt
+            ).count()
+            
+            user_stats.append({
+                "id": user.id,
+                "staff_code": user.staff_code,
+                "name": user.name,
+                "employment_type": user.employment_type,
+                "present": present_count,
+                "tardy": tardy_count,
+                "absent": absent_count
+            })
         
-        user_stats.append({
-            "id": user.id,
-            "staff_code": user.staff_code,
-            "name": user.name,
-            "employment_type": user.employment_type,
-            "present": present_count,
-            "tardy": tardy_count,
-            "absent": absent_count
+        # Also get weekly trends for the chart
+        trends = analytics.get_weekly_trends(start_date, end_date)
+        
+        return JSONResponse({
+            "status": "success",
+            "stats": user_stats,
+            "trends": trends
         })
-    
-    # Also get weekly trends for the chart
-    trends = analytics.get_weekly_trends()
-    
-    return JSONResponse({
-        "stats": user_stats,
-        "trends": trends
-    })
+    except Exception as e:
+        logging.error(f"Dashboard analytics error: {e}")
+        logging.error(traceback.format_exc())
+        return JSONResponse({"status": "error", "message": str(e), "traceback": traceback.format_exc()}, status_code=500)
 
 @app.post("/add_user")
 async def add_user(request: Request, name: str = Form(...), email: str = Form(...), employment_type: str = Form("Full-time"), db: Session = Depends(get_db)):
@@ -887,13 +1005,29 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
         face_results = sorted(face_results, key=lambda f: f.bbox[2] * f.bbox[3], reverse=True)
         res = face_results[0]
         (x, y, w, h) = res.bbox
-        face_img = frame[y:y+h, x:x+w]
+        
+        # Ensure coordinates are within frame boundaries
+        y1, y2 = max(0, y), min(frame.shape[0], y+h)
+        x1, x2 = max(0, x), min(frame.shape[1], x+w)
+        
+        face_img = frame[y1:y2, x1:x2]
+        
+        if face_img.size == 0:
+            return JSONResponse({'status': 'no_face', 'count': existing})
+
         gray_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
         filename = f"{existing + 1}.jpg"
         cv2.imwrite(os.path.join(user_dir, filename), gray_face)
         return JSONResponse({'status': 'success', 'count': existing + 1})
     
     return JSONResponse({'status': 'no_face', 'count': existing})
+
+from cachetools import TTLCache
+import time
+
+# Rate limiting for recognition requests (per IP)
+# Increased to 20 requests per 2 seconds (10 FPS max) to avoid client-side chaos
+recognition_rate_limit = TTLCache(maxsize=1000, ttl=2.0)
 
 @app.post("/api/recognize")
 async def api_recognize(request: Request, db: Session = Depends(get_db)):
@@ -908,6 +1042,17 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
     if settings.APP_ROLE != "LOCAL_KIOSK":
         return JSONResponse({'status': 'error', 'message': 'Recognition not available'}, status_code=404)
     
+    # Rate limiting check
+    client_ip = request.client.host
+    current_count = recognition_rate_limit.get(client_ip, 0)
+    if current_count >= 20: # Relaxed limit
+        return JSONResponse({'status': 'error', 'message': 'Too many requests'}, status_code=429)
+    recognition_rate_limit[client_ip] = current_count + 1
+
+    # If camera is not active, don't process recognition
+    if not camera_active:
+        return JSONResponse({'status': 'idle', 'faces': []})
+
     data = await request.json()
     image_data = data.get('image')
     
@@ -1017,8 +1162,19 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
 
     return JSONResponse({'status': 'success', 'faces': results})
 
+@app.post("/api/camera/state")
+async def set_camera_state(request: Request):
+    """Activates or deactivates the camera from the frontend."""
+    global camera_active, current_session_user
+    data = await request.json()
+    state = data.get("active", False)
+    camera_active = state
+    if not state:
+        current_session_user = None
+    return JSONResponse({"status": "success", "active": camera_active})
+
 @app.post("/api/attendance/record")
-async def api_attendance_record(request: Request, db: Session = Depends(get_db), redis: Redis = Depends(get_redis)):
+async def api_attendance_record(request: Request, db: Session = Depends(get_db), redis: Any = Depends(get_redis)):
     """
     Records an attendance log for a user (login/logout).
     - Requires a verified liveness check.
@@ -1203,35 +1359,32 @@ async def advanced_analytics_data(
     analytics = AnalyticsEngine(db)
     
     # Parse dates if provided
-    start = datetime.strptime(start_date, '%Y-%m-%d').date() if start_date else None
-    end = datetime.strptime(end_date, '%Y-%m-%d').date() if end_date else None
+    try:
+        start = datetime.strptime(start_date, '%Y-%m-%d').date() if start_date and start_date != "null" else None
+        end = datetime.strptime(end_date, '%Y-%m-%d').date() if end_date and end_date != "null" else None
+    except ValueError:
+        start, end = None, None
     
     # Get all the different data slices using the engine
     weekly = analytics.get_weekly_trends(start, end, employment_type, user_id)
     monthly = analytics.get_monthly_trends(start, end, employment_type, user_id)
     
     # Calculate status distribution
-    df = analytics.get_attendance_dataframe(start, end, employment_type, user_id)
-    status_dist = {"labels": [], "data": []}
-    if not df.empty:
-        counts = df['status'].value_counts()
-        status_dist = {
-            "labels": counts.index.tolist(),
-            "data": counts.values.tolist()
-        }
+    status_dist = analytics.get_status_distribution(start, end, employment_type, user_id)
     
     # Peak arrival calculation
     peak_raw = analytics.get_peak_arrival_times(start, end, employment_type, user_id)
-    peak = {"labels": [f"{h}:00" for h in range(24)], "data": [0]*24}
+    peak = {"labels": [f"{h:02d}:00" for h in range(24)], "data": [0]*24}
     for h, count in peak_raw.items():
         if 0 <= h < 24:
             peak["data"][h] = int(count)
     
-    # Risk users
-    risks = analytics.predict_risk_users()
-    
-    # Advanced insights
-    insights = analytics.get_advanced_insights(start, end, employment_type, user_id)
+    # Risks users - with separate caching
+    if "risks" in risk_cache:
+        risks = risk_cache["risks"]
+    else:
+        risks = analytics.predict_risk_users()
+        risk_cache["risks"] = risks
     
     # Store the result in the cache
     result = {
@@ -1240,18 +1393,23 @@ async def advanced_analytics_data(
         "status_distribution": status_dist,
         "peak_arrival": peak,
         "risk_users": risks,
-        "insights": insights
+        "insights": [] # Initialize empty list for insights
     }
+
+    # Generate insights only if they are not already cached or if requested
+    insights = analytics.get_advanced_insights(start, end, employment_type, user_id)
+    result["insights"] = insights
+    
     analytics_cache[cache_key] = result
     
     return JSONResponse(result)
 
 @app.post("/request_early_report")
-async def request_early_report(request: Request, staff_code: str = Form(...), db: Session = Depends(get_db)):
+async def request_early_report(request: Request, user_id: int = Form(...), db: Session = Depends(get_db)):
     """Handles the request for an early attendance report from the staff portal."""
-    user = db.query(User).filter(User.staff_code == staff_code).first()
+    user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        request.state.flash("Invalid Staff ID", "danger")
+        request.state.flash("Invalid User ID", "danger")
         return RedirectResponse(url="/staff_portal", status_code=303)
 
     if not user.email:

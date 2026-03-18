@@ -275,17 +275,15 @@ impl AnalyticsEngine {
             "Official Time".to_string(),
             "Official Business".to_string(),
             "Leave".to_string(),
-            "Leave Without Pay (LWOP)".to_string(),
         ];
         
-        let mut categorized_data = vec![0; 6];
+        let mut categorized_data = vec![0; 5];
 
         for (i, status) in labels.iter().enumerate() {
             let count = data[i];
             match status.as_str() {
                 "Late" | "Tardy" => categorized_data[0] += count,
                 "Present" | "On Time" => categorized_data[2] += count,
-                "Absent" => categorized_data[5] += count,
                 "Excused" => categorized_data[4] += count,
                 _ => {
                     // For other statuses, we'll map them to appropriate categories

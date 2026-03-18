@@ -1,17 +1,65 @@
 services:
-  web:
-    build: .
+  db:
+    image: postgres:15-alpine
+    container_name: cviaar-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cviaar
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password123
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d cviaar"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cviaar-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cviaar-app
+    restart: unless-stopped
     ports:
       - "10000:10000"
     volumes:
       - .:/app
       - ./data:/app/data
+      - ./static/uploads:/app/static/uploads
     env_file:
       - .env
     environment:
-      - TZ=Asia/Manila
       - PORT=10000
-    dns:
-      - 8.8.8.8
-      - 8.8.4.4
-    restart: unless-stopped
+      - TZ=Asia/Manila
+      # Override DB and Redis URLs to use the local Docker containers if desired
+      # - DATABASE_URL=postgresql://admin:password123@db:5432/cviaar
+      # - REDIS_URL=redis://redis:6379/0
+      - DEBUG=true
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # For live reloading in development, we override the CMD
+    command: ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 10000 --reload"]
+
+volumes:
+  pgdata:
+  redisdata:

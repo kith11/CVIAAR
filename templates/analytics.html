@@ -4,38 +4,27 @@
 <style>
     :root {
         --chart-bg: #ffffff;
-        --chart-text: #111111;
-        --chart-grid: #f0f0f0;
-        --insight-card-bg: rgba(13, 110, 253, 0.05);
-    }
-
-    [data-theme="dark"] {
-        --chart-bg: #1a1a1a;
-        --chart-text: #eeeeee;
-        --chart-grid: #333333;
-        --insight-card-bg: rgba(13, 110, 253, 0.1);
+        --chart-text: #2d3436;
+        --chart-grid: #f1f3f9;
+        --insight-card-bg: #f8f9fc;
     }
 
     .analytics-container {
-        max-width: 1400px;
-        margin: 0 auto;
+        max-width: 100%;
+        margin: 0;
     }
 
     .chart-card {
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
         border: 1px solid var(--border-color);
         background: var(--chart-bg);
-    }
-
-    .chart-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+        border-radius: 6px;
+        padding: 1rem !important;
     }
 
     .insight-item {
-        border-left: 4px solid var(--accent);
-        padding-left: 1rem;
-        margin-bottom: 1.5rem;
+        border-left: 3px solid var(--primary);
+        padding-left: 0.75rem;
+        margin-bottom: 1rem;
     }
 
     .drill-down-active {
@@ -43,123 +32,114 @@
     }
 
     .stat-value {
-        font-size: 2rem;
-        font-weight: 800;
-        letter-spacing: -0.02em;
+        font-size: 1.5rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
     }
 
-    .tooltip-custom {
-        background: rgba(0,0,0,0.8);
-        color: white;
-        padding: 8px 12px;
-        border-radius: 6px;
-        font-size: 12px;
-        pointer-events: none;
+    .x-small {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        font-weight: 600;
+    }
+
+    /* Minimal Filter Bar */
+    .filter-card {
+        background: #fff;
+        border-bottom: 1px solid var(--border-color);
+        margin-bottom: 1.5rem;
+        padding: 0.75rem 1rem;
     }
 </style>
 
-<div class="analytics-container py-4">
-    <div class="d-flex justify-content-between align-items-center mb-5">
+<div class="analytics-container">
+    <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
-            <h1 class="fw-bold h2 mb-1">Advanced BI Dashboard</h1>
-            <p class="text-muted small mb-0">High-resolution attendance metrics and predictive insights</p>
+            <h1 class="section-title">Analytics BI</h1>
+            <p class="section-desc mb-0">Operational intelligence & predictive trends</p>
         </div>
         <div class="d-flex gap-2">
-            <button class="btn btn-sm btn-outline-dark" onclick="window.print()">
-                <i class="bi bi-printer me-2"></i>Export PDF
+            <button class="btn btn-xs btn-outline-secondary" onclick="window.print()">
+                <i class="bi bi-printer me-1"></i>PDF
             </button>
-            <a href="{{ url_for('admin') }}" class="btn btn-sm btn-dark">
-                <i class="bi bi-grid me-2"></i>Dashboard
+            <a href="{{ url_for('admin') }}" class="btn btn-xs btn-secondary">
+                <i class="bi bi-grid me-1"></i>Dashboard
             </a>
         </div>
     </div>
 
-    <!-- AI Insights Narrative Panel -->
-    <div class="card border-0 shadow-sm mb-5" style="background: var(--insight-card-bg);">
-        <div class="card-body p-4">
-            <div class="d-flex align-items-center mb-4">
-                <span class="badge bg-primary px-3 py-2 rounded-pill me-3">
-                    <i class="bi bi-stars me-2"></i>AI INSIGHTS
-                </span>
-                <h5 class="fw-bold mb-0 text-primary">Strategic Attendance Analysis</h5>
-            </div>
-            <div id="narrativeInsights" class="row g-4">
-                <div class="col-12 text-center py-4">
-                    <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
-                    <span class="ms-2 small text-muted">Running anomaly detection algorithms...</span>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Filter Bar -->
-    <div class="card border-0 shadow-sm p-3 mb-5 sticky-top bg-white" style="top: 80px; z-index: 900;">
-        <form id="filterForm" class="row g-3 align-items-end">
+    <!-- Minimal Filter Bar -->
+    <div class="card filter-card border-0 rounded-0 shadow-none sticky-top" style="top: 60px; z-index: 900;">
+        <form id="filterForm" class="row g-2 align-items-end">
             <div class="col-md-3">
-                <label class="small fw-bold text-muted mb-1">Date Range</label>
+                <label class="x-small text-muted mb-1">Date Range</label>
                 <div class="input-group input-group-sm">
-                    <input type="date" id="startDate" class="form-control border-0 bg-light">
-                    <span class="input-group-text border-0 bg-light">to</span>
-                    <input type="date" id="endDate" class="form-control border-0 bg-light">
+                    <input type="date" id="startDate" class="form-control form-control-sm border-0 bg-light">
+                    <input type="date" id="endDate" class="form-control form-control-sm border-0 bg-light">
                 </div>
             </div>
             <div class="col-md-2">
-                <label class="small fw-bold text-muted mb-1">Employment Type</label>
+                <label class="x-small text-muted mb-1">Category</label>
                 <select id="empType" class="form-select form-select-sm border-0 bg-light">
-                    <option value="All">All Categories</option>
+                    <option value="All">All</option>
                     <option value="Full-time">Full-time</option>
                     <option value="Part-time">Part-time</option>
                 </select>
             </div>
             <div class="col-md-3">
-                <label class="small fw-bold text-muted mb-1">Filter by User</label>
+                <label class="x-small text-muted mb-1">Personnel</label>
                 <select id="userFilter" class="form-select form-select-sm border-0 bg-light">
-                    <option value="All">All Active Employees</option>
+                    <option value="All">All Personnel</option>
                     {% for u in users %}
                     <option value="{{ u.id }}">{{ u.name }}</option>
                     {% endfor %}
                 </select>
             </div>
             <div class="col-md-2">
-                <button type="submit" class="btn btn-sm btn-primary w-100 fw-bold">
-                    <i class="bi bi-filter me-2"></i>Update Views
-                </button>
+                <button type="submit" class="btn btn-sm btn-primary w-100 fw-bold">Update</button>
             </div>
             <div class="col-md-2">
                 <div class="btn-group btn-group-sm w-100">
-                    <button type="button" class="btn btn-outline-secondary" onclick="setDateRange('week')">W</button>
-                    <button type="button" class="btn btn-outline-secondary" onclick="setDateRange('month')">M</button>
-                    <button type="button" class="btn btn-outline-secondary" onclick="setDateRange('year')">Y</button>
+                    <button type="button" class="btn btn-outline-light text-muted border-0 bg-light" onclick="setDateRange('week')">W</button>
+                    <button type="button" class="btn btn-outline-light text-muted border-0 bg-light" onclick="setDateRange('month')">M</button>
                 </div>
             </div>
         </form>
     </div>
 
+    <!-- AI Insights Narrative Panel -->
+    <div class="card border-0 rounded-3 mb-4" style="background: var(--insight-card-bg); border: 1px solid var(--border-color) !important;">
+        <div class="card-body p-3">
+            <div class="d-flex align-items-center mb-3">
+                <span class="badge bg-secondary bg-opacity-10 text-secondary border px-2 py-1 me-2">
+                    <i class="bi bi-stars me-1"></i>AI INSIGHTS
+                </span>
+                <h6 class="fw-bold mb-0 text-dark small">Strategic Analysis</h6>
+            </div>
+            <div id="narrativeInsights" class="row g-3">
+                <div class="col-12 text-center py-2">
+                    <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="row g-4 mb-5">
         <!-- Weekly Trends (Plotly) -->
         <div class="col-lg-8">
-            <div class="card chart-card h-100 p-4 rounded-4 border-0 shadow-sm">
-                <div class="d-flex justify-content-between align-items-start mb-4">
+            <div class="card chart-card h-100 shadow-none border-0 p-0" style="background: transparent;">
+                <div class="d-flex justify-content-between align-items-center mb-3">
                     <div>
-                        <h6 class="fw-bold mb-1">Attendance Velocity & Trends</h6>
-                        <p class="text-muted x-small mb-0">Multi-layered distribution with sub-pixel precision</p>
+                        <h6 class="fw-bold mb-1 small">Attendance Velocity</h6>
+                        <div id="weeklyComparison" class="x-small text-muted"></div>
                     </div>
-                    <div class="dropdown">
-                        <button class="btn btn-sm btn-light rounded-pill px-3" data-bs-toggle="dropdown">
-                            Options <i class="bi bi-chevron-down ms-1"></i>
-                        </button>
-                        <ul class="dropdown-menu shadow border-0">
-                            <li><a class="dropdown-item small" href="#" onclick="changeChartType('weekly', 'bar')">Bar View</a></li>
-                            <li><a class="dropdown-item small" href="#" onclick="changeChartType('weekly', 'line')">Line View</a></li>
-                        </ul>
+                    <div class="btn-group btn-group-xs">
+                        <button class="btn btn-outline-secondary py-0" onclick="changeChartType('weekly', 'bar')">Bar</button>
+                        <button class="btn btn-outline-secondary py-0" onclick="changeChartType('weekly', 'line')">Line</button>
                     </div>
                 </div>
-                <div id="weeklyPlotly" style="height: 350px;"></div>
-                <div class="mt-3 d-flex justify-content-center gap-4">
-                    <div class="small d-flex align-items-center"><span class="rounded-circle me-2" style="width:10px; height:10px; background:#1cc88a;"></span> Present</div>
-                    <div class="small d-flex align-items-center"><span class="rounded-circle me-2" style="width:10px; height:10px; background:#f6c23e;"></span> Late</div>
-                    <div class="small d-flex align-items-center"><span class="rounded-circle me-2" style="width:10px; height:10px; background:#e74a3b;"></span> Absent</div>
-                </div>
+                <div id="weeklyPlotly" style="height: 300px; background: #fff; border: 1px solid var(--border-color); border-radius: 6px;"></div>
             </div>
         </div>
 
@@ -254,19 +234,41 @@
         const type = document.getElementById('empType').value;
         const user = document.getElementById('userFilter').value;
 
+        // Show loading state
+        const insightsContainer = document.getElementById('narrativeInsights');
+        insightsContainer.innerHTML = `
+            <div class="col-12 text-center py-4">
+                <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+                <span class="ms-2 small text-muted">Running anomaly detection algorithms...</span>
+            </div>
+        `;
+
         const params = new URLSearchParams({ start_date: start, end_date: end, employment_type: type, user_id: user });
         
+        const startTime = performance.now();
         try {
             const response = await fetch(`/api/advanced_analytics_data?${params.toString()}`);
             currentData = await response.json();
+            const duration = (performance.now() - startTime).toFixed(0);
+            console.log(`Analytics data loaded in ${duration}ms`);
             
             renderWeeklyPlotly(currentData.weekly_trends);
             renderStatusChart(currentData.status_distribution);
             renderPeakPlotly(currentData.peak_arrival);
             renderStrategicRiskTable(currentData.risk_users);
             renderNarrativeInsights(currentData.insights);
+            
+            // Update weekly comparison text
+            const comp = currentData.weekly_trends.comparison;
+            const growthColor = comp.growth >= 0 ? 'text-success' : 'text-danger';
+            const engColor = comp.engagement_change >= 0 ? 'text-success' : 'text-danger';
+            document.getElementById('weeklyComparison').innerHTML = `
+                <span class="${growthColor}">${comp.growth >= 0 ? '+' : ''}${comp.growth}% activity</span> vs last week • 
+                <span class="${engColor}">${comp.engagement_change >= 0 ? '+' : ''}${comp.engagement_change}% engagement</span>
+            `;
         } catch (err) {
             console.error("Dashboard engine failure:", err);
+            insightsContainer.innerHTML = '<div class="col-12 text-danger">Failed to load strategic analysis.</div>';
         }
     }
 
@@ -295,9 +297,9 @@
             x: data.labels,
             y: data.present,
             name: 'Present',
-            type: 'bar',
+            type: currentChartTypes.weekly || 'bar',
             marker: { color: '#1cc88a', opacity: 0.8, line: { width: 0 } },
-            hovertemplate: '<b>%{x}</b><br>Present: %{y}<br>Engagement: %{customdata}%<extra></customdata></extra>',
+            hovertemplate: '<b>%{x}</b><br>Present: %{y}<br>Engagement: %{customdata}%<extra></extra>',
             customdata: data.present.map((v, i) => {
                 const total = v + data.late[i] + data.absent[i];
                 return total > 0 ? (v/total*100).toFixed(1) : 0;
@@ -308,7 +310,7 @@
             x: data.labels,
             y: data.late,
             name: 'Late',
-            type: 'bar',
+            type: currentChartTypes.weekly || 'bar',
             marker: { color: '#f6c23e', opacity: 0.8 },
             hovertemplate: '<b>%{x}</b><br>Late: %{y}<br>Impact: %{customdata}%<extra></extra>',
             customdata: data.late.map((v, i) => {
@@ -321,7 +323,7 @@
             x: data.labels,
             y: data.absent,
             name: 'Absent',
-            type: 'bar',
+            type: currentChartTypes.weekly || 'bar',
             marker: { color: '#e74a3b', opacity: 0.8 },
             hovertemplate: '<b>%{x}</b><br>Absent: %{y}<extra></extra>'
         };
@@ -341,12 +343,24 @@
         Plotly.newPlot('weeklyPlotly', [trace1, trace2, trace3], layout, { responsive: true, displayModeBar: false });
 
         document.getElementById('weeklyPlotly').on('plotly_click', (data) => {
+            if (!data.points || data.points.length === 0) return;
             const point = data.points[0];
             showDeepDive(point.x, currentData.weekly_trends.present[point.pointIndex], currentData.weekly_trends.late[point.pointIndex], currentData.weekly_trends.absent[point.pointIndex]);
         });
     }
 
+    let currentChartTypes = { weekly: 'bar' };
+    function changeChartType(chart, type) {
+        currentChartTypes[chart] = type;
+        if (chart === 'weekly') renderWeeklyPlotly(currentData.weekly_trends);
+    }
+
     function renderStatusChart(data) {
+        if (!data || !data.data || !data.labels) {
+            console.warn("Insufficient data for status chart");
+            return;
+        }
+        
         const ctx = document.getElementById('statusChart').getContext('2d');
         if (chartObjects.status) chartObjects.status.destroy();
 
@@ -359,7 +373,7 @@
                 labels: data.labels,
                 datasets: [{
                     data: data.data,
-                    backgroundColor: data.colors,
+                    backgroundColor: data.colors || ['#0d6efd', '#6c757d', '#adb5bd', '#343a40', '#dee2e6', '#212529'],
                     borderWidth: 0,
                     hoverOffset: 20
                 }]
@@ -376,7 +390,7 @@
                         padding: 12,
                         callbacks: {
                             label: (ctx) => {
-                                const pct = ((ctx.raw / total) * 100).toFixed(1);
+                                const pct = total > 0 ? ((ctx.raw / total) * 100).toFixed(1) : 0;
                                 return ` ${ctx.label}: ${ctx.raw} (${pct}%)`;
                             }
                         }
@@ -387,12 +401,14 @@
 
         const legend = document.getElementById('statusLegend');
         legend.innerHTML = '';
+        const colors = data.colors || [];
         data.labels.forEach((l, i) => {
             const pct = total > 0 ? (data.data[i] / total * 100).toFixed(0) : 0;
+            const color = colors[i] || '#ccc';
             legend.innerHTML += `
                 <div class="col-6">
                     <div class="d-flex align-items-center small">
-                        <div class="rounded-circle me-2" style="width:8px; height:8px; background:${data.colors[i]};"></div>
+                        <div class="rounded-circle me-2" style="width:8px; height:8px; background:${color};"></div>
                         <span class="text-muted text-truncate">${l}</span>
                         <span class="ms-auto fw-bold">${pct}%</span>
                     </div>
@@ -402,17 +418,21 @@
     }
 
     function renderPeakPlotly(data) {
+        if (!data || !data.data || data.data.every(v => v === 0)) {
+            document.getElementById('peakPlotly').innerHTML = '<div class="h-100 d-flex align-items-center justify-content-center text-muted small">No arrival data captured for the selected window.</div>';
+            return;
+        }
+
         const trace = {
             x: data.labels,
             y: data.data,
             type: 'scatter',
             mode: 'lines+markers',
-            name: 'Check-ins',
             line: { shape: 'spline', color: '#4e73df', width: 3 },
-            marker: { size: 8, color: '#ffffff', line: { width: 2, color: '#4e73df' } },
+            marker: { size: 6, color: '#4e73df' },
             fill: 'tozeroy',
             fillcolor: 'rgba(78, 115, 223, 0.05)',
-            hovertemplate: '<b>%{x}</b><br>Volume: %{y} units<extra></extra>'
+            hovertemplate: '<b>%{x}</b><br>Volume: %{y}<extra></extra>'
         };
 
         const layout = {

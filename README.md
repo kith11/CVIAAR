@@ -57,8 +57,71 @@ This application is designed with an **Edge-to-Cloud** architecture:
 ## 🌐 Deployment Links
 - **Online Dashboard**: [https://cviaar.onrender.com/](https://cviaar.onrender.com/)
 
+## 🐳 Docker Environment
+
+This project includes a complete Dockerized development and production environment. The entire stack (Application, PostgreSQL Database, and Redis Cache) can be orchestrated with a single command.
+
+### 🏗️ Getting Started
+
+1.  **Prerequisites**: Ensure you have [Docker](https://www.docker.com/get-started) and [Docker Compose](https://docs.docker.com/compose/install/) installed.
+2.  **Environment Configuration**: Ensure your `.env` file is present in the root directory. If you wish to use the local Dockerized services (Postgres and Redis) instead of remote ones (Supabase/Upstash), you can leave those variables empty or override them in the `docker-compose.yml` file.
+3.  **Start the Stack**:
+    ```bash
+    docker-compose up --build
+    ```
+    The application will be accessible at [http://localhost:10000](http://localhost:10000).
+
+### 🛠️ Development Features
+
+- **Live Reloading**: The application service is configured with volume mounts (`.:/app`) and `uvicorn --reload`, meaning changes to your local Python files will trigger an automatic restart within the container.
+- **Persistent Data**: 
+    - PostgreSQL data is persisted in the `pgdata` volume.
+    - Redis data is persisted in the `redisdata` volume.
+    - Local SQLite database and biometric files are persisted via a mount to the `./data` directory.
+- **Health Checks**: Every service includes built-in health checks. The application will only start once the database and cache are verified as healthy.
+
+### 🔍 Debugging & Maintenance
+
+- **View Logs**:
+    ```bash
+    docker-compose logs -f app
+    ```
+- **Access Database**:
+    ```bash
+    docker exec -it cviaar-db psql -U admin -d cviaar
+    ```
+- **Access Redis**:
+    ```bash
+    docker exec -it cviaar-redis redis-cli
+    ```
+- **Stop the Environment**:
+    ```bash
+    docker-compose down
+    ```
+    *Note: Use `docker-compose down -v` if you also want to delete the persistent volumes.*
+
 ---
-## 🔧 Recent Fixes & Maintenance (March 2026)
+## �️ Instance Lifecycle & Reliability
+
+To ensure system stability and prevent resource conflicts (e.g., multiple processes accessing the camera or SQLite database), the application implements strict **Instance Lifecycle Management**.
+
+### 🚦 Singleton Enforcement
+- **PID Locking**: The application creates a `data/app.pid` file on startup. If another instance is already running, the new process will log an error and exit immediately.
+- **Auto-Cleanup**: On graceful shutdown, the application automatically removes its PID file using Python's `atexit` module.
+- **Reloader Awareness**: The logic is designed to work seamlessly with Uvicorn's `--reload` mode, ensuring the reloader parent and worker processes don't conflict with each other.
+
+### 🧹 Systematic Cleanup
+If the system enters a state of "operational chaos" with orphaned processes, use the following procedure:
+1.  **Stop Docker Stack**: `docker-compose down --remove-orphans`
+2.  **Prune Resources**: `docker system prune -f` (reclaims space and removes unused networks/containers).
+3.  **Manual PID Reset**: If the app refuses to start due to a stale lock, manually delete `data/app.pid`.
+
+### 🩺 Monitoring
+- **Health Checks**: The [Dockerfile](file:///c%3A/Users/keith/Downloads/projectCVI3/Dockerfile) includes a `HEALTHCHECK` that probes the application every 30 seconds.
+- **Docker Status**: Use `docker ps` to monitor the `STATUS` column; it should transition from `starting` to `healthy`.
+
+---
+## �🔧 Recent Fixes & Maintenance (March 2026)
 
 The following critical issues were resolved to ensure system stability and performance:
 

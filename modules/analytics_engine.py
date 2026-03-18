@@ -57,6 +57,8 @@ class AnalyticsEngine:
         
         data = []
         for log, user in results:
+            if not log.timestamp:
+                continue
             data.append({
                 'user_id': log.user_id,
                 'name': user.name,
@@ -90,7 +92,8 @@ class AnalyticsEngine:
         df = self.get_attendance_dataframe(start_date, end_date, employment_type, user_id)
         if df.empty:
             return {'labels': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], 
-                    'present': [0]*7, 'late': [0]*7, 'absent': [0]*7}
+                    'present': [0]*7, 'late': [0]*7, 'absent': [0]*7,
+                    'comparison': {"growth": 0, "engagement_change": 0}}
 
         days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
         
@@ -114,7 +117,45 @@ class AnalyticsEngine:
             'labels': days,
             'present': present_counts,
             'late': late_counts,
-            'absent': absent_counts
+            'absent': absent_counts,
+            'comparison': self._get_weekly_comparison(start_date, end_date, employment_type, user_id)
+        }
+
+    def _get_weekly_comparison(self, start_date, end_date, employment_type, user_id):
+        """Internal helper to calculate growth/engagement compared to the previous week."""
+        if not start_date or not end_date:
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=7)
+        
+        # Current week metrics
+        current_df = self.get_attendance_dataframe(start_date, end_date, employment_type, user_id)
+        if current_df.empty:
+            return {"growth": 0, "engagement_change": 0}
+            
+        current_present = len(current_df[current_df['status'].isin(['Present', 'On Time'])])
+        current_total = len(current_df)
+        current_rate = (current_present / current_total * 100) if current_total > 0 else 0
+
+        # Previous week metrics
+        prev_start = start_date - timedelta(days=7)
+        prev_end = end_date - timedelta(days=7)
+        prev_df = self.get_attendance_dataframe(prev_start, prev_end, employment_type, user_id)
+        
+        if prev_df.empty:
+            return {"growth": 100, "engagement_change": current_rate}
+
+        prev_present = len(prev_df[prev_df['status'].isin(['Present', 'On Time'])])
+        prev_total = len(prev_df)
+        prev_rate = (prev_present / prev_total * 100) if prev_total > 0 else 0
+
+        growth = ((current_total - prev_total) / prev_total * 100) if prev_total > 0 else 0
+        engagement_change = current_rate - prev_rate
+
+        return {
+            "growth": round(growth, 1),
+            "engagement_change": round(engagement_change, 1),
+            "current_total": current_total,
+            "prev_total": prev_total
         }
 
     def get_monthly_trends(self, start_date=None, end_date=None, employment_type=None, user_id=None):
@@ -176,9 +217,10 @@ class AnalyticsEngine:
             'absent': absent_counts
         }
 
-    def predict_risk_users(self):
+    def predict_risk_users(self, days=90):
         """
         Identifies users at high risk of being late or absent based on their attendance history.
+        By default, analyzes the last 90 days of data for better performance.
 
         This method uses a simple heuristic model:
         - **Medium Risk**: Late rate > 30%
@@ -187,7 +229,8 @@ class AnalyticsEngine:
         Returns:
             list: A list of dictionaries, where each dictionary represents a user at risk.
         """
-        df = self.get_attendance_dataframe()
+        start_date = (datetime.now() - timedelta(days=days)).date()
+        df = self.get_attendance_dataframe(start_date=start_date)
         if df.empty:
             return []
 
@@ -297,17 +340,15 @@ class AnalyticsEngine:
                     'Undertime',
                     'Official Time',
                     'Official Business',
-                    'Leave',
-                    'Leave Without Pay (LWOP)'
+                    'Leave'
                 ],
-                'data': [0, 0, 0, 0, 0, 0],
+                'data': [0, 0, 0, 0, 0],
                 'colors': [
                     '#0d6efd',
                     '#6c757d',
                     '#adb5bd',
                     '#343a40',
-                    '#dee2e6',
-                    '#212529'
+                    '#dee2e6'
                 ]
             }
             
@@ -318,8 +359,7 @@ class AnalyticsEngine:
             'Undertime': 0,
             'Official Time': 0,
             'Official Business': 0,
-            'Leave': 0,
-            'Leave Without Pay (LWOP)': 0
+            'Leave': 0
         }
 
         for status, count in status_counts.items():
@@ -327,8 +367,6 @@ class AnalyticsEngine:
                 categories['Late'] += int(count)
             elif status in ['Present', 'On Time']:
                 categories['Official Time'] += int(count)
-            elif status == 'Absent':
-                categories['Leave Without Pay (LWOP)'] += int(count)
             elif status == 'Excused':
                 categories['Leave'] += int(count)
 

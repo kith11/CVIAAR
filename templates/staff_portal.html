@@ -12,13 +12,41 @@
             <div class="card-title">Identify Yourself</div>
             <form method="POST">
                 <div class="mb-4">
-                    <label class="form-label small fw-bold">Enter 6-digit Staff ID</label>
-                    <input type="text" name="staff_code" class="form-control" required placeholder="e.g. 123456" minlength="6" maxlength="6" pattern="\d{6}">
+                    <label class="form-label small fw-bold">Select Your Name</label>
+                    <select name="user_id" class="form-select" id="userSelect" required>
+                        <option value="" disabled selected>Loading names...</option>
+                    </select>
                 </div>
                 <button type="submit" class="btn btn-primary w-100">View My Records</button>
             </form>
         </div>
     </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', async function() {
+            const userSelect = document.getElementById('userSelect');
+            try {
+                const response = await fetch('/api/users');
+                if (!response.ok) throw new Error('Failed to fetch users');
+                const users = await response.json();
+                
+                userSelect.innerHTML = '<option value="" disabled selected>Choose your name</option>';
+                if (users.length === 0) {
+                    userSelect.innerHTML = '<option value="" disabled>No users found</option>';
+                } else {
+                    users.sort((a, b) => a.name.localeCompare(b.name)).forEach(user => {
+                        const option = document.createElement('option');
+                        option.value = user.id;
+                        option.textContent = user.name;
+                        userSelect.appendChild(option);
+                    });
+                }
+            } catch (err) {
+                console.error('Error loading users:', err);
+                userSelect.innerHTML = '<option value="" disabled>Error loading users</option>';
+            }
+        });
+    </script>
 
     <div class="col-lg-8">
         {% if user %}
@@ -33,7 +61,7 @@
                 </div>
                 <div class="ms-auto">
                     <form action="/request_early_report" method="POST">
-                        <input type="hidden" name="staff_code" value="{{ user.staff_code }}">
+                        <input type="hidden" name="user_id" value="{{ user.id }}">
                         <button type="submit" class="btn btn-outline-primary btn-sm">
                             <i class="bi bi-envelope-paper me-1"></i> Request Early Report
                         </button>
