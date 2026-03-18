@@ -32,9 +32,10 @@ from upstash_redis import Redis
 
 from config import settings
 from modules.models import Base, User, Attendance, AttendanceEdit, ExcuseNote
-from modules.camera import Camera
-from modules.face_engine import FaceEngine
-from modules.sync_engine import SyncEngine
+# Heavy modules moved into conditional blocks below
+# from modules.camera import Camera
+# from modules.face_engine import FaceEngine
+# from modules.sync_engine import SyncEngine
 from modules.analytics_engine import AnalyticsEngine
 
 import logging
@@ -110,16 +111,40 @@ templates = Jinja2Templates(directory=os.path.join(basedir, "templates"))
 APP_ROLE = os.getenv("APP_ROLE", "LOCAL_KIOSK")
 DEVICE_ID = os.getenv("DEVICE_ID", "local-device")
 
-# Determine the database URL based on the application's role.
-local_sqlite_path = os.getenv(
-    "SQLITE_DB_PATH",
-    os.path.join(basedir, "data", "offline", "cviaar_local.sqlite3"),
-)
-local_sqlite_url = f"sqlite:///{local_sqlite_path}"
+# Determine the database URL based on the application's role and environment.
+# On Render or similar platforms, DATABASE_URL will point to a remote PostgreSQL.
+# In local kiosk mode, we fallback to SQLite.
+local_sqlite_url = f"sqlite:///{os.path.join(basedir, 'data', 'offline', 'cviaar_local.sqlite3')}"
+db_url = settings.DATABASE_URL or local_sqlite_url
 
-# The engine is configured with `check_same_thread=False` for SQLite compatibility with FastAPI.
-engine = create_engine(local_sqlite_url, connect_args={"check_same_thread": False})
+# Fix for SQLAlchemy 1.4+ which requires "postgresql://" instead of "postgres://"
+if db_url and db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+# The engine is configured with `check_same_thread=False` ONLY for SQLite.
+connect_args = {"check_same_thread": False} if db_url.startswith("sqlite") else {}
+try:
+    engine = create_engine(db_url, connect_args=connect_args)
+    # Test connection
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+    logging.info(f"Successfully connected to database: {db_url.split('@')[-1] if '@' in db_url else 'SQLite'}")
+except Exception as e:
+    logging.error(f"Database connection failed: {e}")
+    # Fallback to local SQLite if remote fails
+    if db_url != local_sqlite_url:
+        logging.warning("Falling back to local SQLite database.")
+        db_url = local_sqlite_url
+        engine = create_engine(db_url, connect_args={"check_same_thread": False})
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Create tables on startup
+try:
+    Base.metadata.create_all(bind=engine)
+    logging.info("Database tables initialized successfully.")
+except Exception as e:
+    logging.error(f"Error initializing database tables: {e}")
 
 def get_db():
     """FastAPI dependency to create and manage database sessions per request."""
@@ -152,6 +177,10 @@ def get_redis():
 # These modules are initialized only if the application is running in "LOCAL_KIOSK" mode,
 # as they are responsible for hardware interaction (camera) and heavy processing (face engine).
 if settings.APP_ROLE == "LOCAL_KIOSK":
+    from modules.camera import Camera
+    from modules.face_engine import FaceEngine
+    from modules.sync_engine import SyncEngine
+    
     # Camera module for capturing video frames.
     camera = Camera()
     # FaceEngine handles face detection, recognition, and blink detection.
@@ -161,7 +190,7 @@ if settings.APP_ROLE == "LOCAL_KIOSK":
     )
     # SyncEngine is a background worker that syncs offline data with a remote server.
     sync_engine = SyncEngine(
-        database_url=local_sqlite_url,
+        database_url=db_url, # Use the common db_url
         supabase_url=settings.SUPABASE_URL or "",
         supabase_key=settings.SUPABASE_KEY or "",
         remote_db_url=settings.DATABASE_URL, # Use direct Postgres URL if provided

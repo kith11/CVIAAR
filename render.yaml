@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: cviaar-admin
+    env: docker
+    plan: free # Change to a paid plan if you need more resources
+    region: ohio # Change as needed
+    dockerContext: .
+    dockerfilePath: Dockerfile
+    envVars:
+      - key: APP_ROLE
+        value: ADMIN_DASHBOARD
+      - key: DATABASE_URL
+        sync: false # Set this in Render dashboard (e.g., Supabase Postgres URL)
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_PASSWORD
+        value: admin123 # Change this immediately!
+      - key: UPSTASH_REDIS_URL
+        sync: false
+      - key: UPSTASH_REDIS_TOKEN
+        sync: false
+    # Persistent disk for SQLite and Face data
+    disk:
+      name: cviaar-data
+      mountPath: /app/data
+      sizeGB: 1
