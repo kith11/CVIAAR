@@ -380,18 +380,51 @@ async def admin(request: Request, db: Session = Depends(get_db)):
     if not request.session.get("logged_in") or request.session.get("role") != "admin":
         return RedirectResponse(url="/login")
 
-    analytics = AnalyticsEngine(db)
-    users = db.query(User).order_by(User.name).all()
-    logs = db.query(Attendance).order_by(Attendance.timestamp.desc()).limit(10).all()
-    trends = analytics.get_weekly_trends()
-    risks = analytics.predict_risk_users()
+    try:
+        analytics = AnalyticsEngine(db)
+        users = db.query(User).order_by(User.name).all()
+        
+        # Only fetch logs that have an associated user to avoid template errors (log.user.name)
+        logs = db.query(Attendance).join(User, Attendance.user_id == User.id).order_by(Attendance.timestamp.desc()).limit(10).all()
+        
+        trends = analytics.get_weekly_trends()
+        risks = analytics.predict_risk_users()
+        
+        return render_template(request, "admin.html", {
+            "users": users, 
+            "logs": logs, 
+            "trends": trends, 
+            "risks": risks
+        })
+    except Exception as e:
+        logging.error(f"Error in admin dashboard: {e}")
+        logging.error(traceback.format_exc())
+        return HTMLResponse(content="Internal Server Error: See logs for details.", status_code=500)
+
+@app.get("/audit_logs", response_class=HTMLResponse)
+async def audit_logs(request: Request, db: Session = Depends(get_db)):
+    """
+    Displays the audit logs for attendance modifications.
+    - Requires admin login.
+    """
+    if not request.session.get("logged_in") or request.session.get("role") != "admin":
+        return RedirectResponse(url="/login")
     
-    return render_template(request, "admin.html", {
-        "users": users, 
-        "logs": logs, 
-        "trends": trends, 
-        "risks": risks
-    })
+    try:
+        # Fetch edits joined with attendance logs and users
+        edits = db.query(AttendanceEdit, Attendance, User).join(
+            Attendance, AttendanceEdit.attendance_id == Attendance.id
+        ).join(
+            User, Attendance.user_id == User.id
+        ).order_by(AttendanceEdit.edited_at.desc()).all()
+        
+        return render_template(request, "audit_logs.html", {
+            "edits": edits
+        })
+    except Exception as e:
+        logging.error(f"Error in audit logs: {e}")
+        logging.error(traceback.format_exc())
+        return HTMLResponse(content="Internal Server Error: See logs for details.", status_code=500)
 
 @app.get("/advanced_analytics", response_class=HTMLResponse)
 async def advanced_analytics(request: Request, db: Session = Depends(get_db)):
