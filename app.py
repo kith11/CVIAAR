@@ -21,6 +21,11 @@ from email.mime.multipart import MIMEMultipart
 
 from fastapi import FastAPI, Request, Response, Depends, HTTPException, Form, UploadFile, File, BackgroundTasks
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, JSONResponse
+from cachetools import TTLCache
+
+# --- Caching --- #
+# In-memory cache with a 5-minute TTL and max size of 100 entries
+analytics_cache = TTLCache(maxsize=100, ttl=300)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -189,15 +194,19 @@ if settings.APP_ROLE == "LOCAL_KIOSK":
         faces_dir=os.path.join(basedir, "data", "faces"),
     )
     # SyncEngine is a background worker that syncs offline data with a remote server.
-    sync_engine = SyncEngine(
-        database_url=db_url, # Use the common db_url
-        supabase_url=settings.SUPABASE_URL or "",
-        supabase_key=settings.SUPABASE_KEY or "",
-        remote_db_url=settings.DATABASE_URL, # Use direct Postgres URL if provided
-        sync_interval=30, # Sync every 30 seconds
-        device_id=settings.DEVICE_ID
-    )
-    sync_engine.start_sync_worker()
+    if settings.SYNC_ENABLED:
+        sync_engine = SyncEngine(
+            database_url=db_url, # Use the common db_url
+            supabase_url=settings.SUPABASE_URL or "",
+            supabase_key=settings.SUPABASE_KEY or "",
+            remote_db_url=settings.DATABASE_URL, # Use direct Postgres URL if provided
+            sync_interval=30, # Sync every 30 seconds
+            device_id=settings.DEVICE_ID
+        )
+        sync_engine.start_sync_worker()
+    else:
+        sync_engine = None
+        logging.info("Sync engine is disabled in configuration.")
 else:
     # In admin mode, these modules are not needed.
     camera = None
@@ -329,6 +338,15 @@ async def index(request: Request, db: Session = Depends(get_db)):
     users = db.query(User).order_by(User.name).all()
     return render_template(request, "index.html", {"users": users})
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """Provides a default favicon to avoid 404 errors in the browser console."""
+    favicon_path = os.path.join(basedir, "static", "favicon.ico")
+    if os.path.exists(favicon_path):
+        return FileResponse(favicon_path)
+    # Return a 204 No Content if no favicon is found to suppress the error
+    return Response(status_code=204)
+
 @app.get("/video_feed")
 async def video_feed():
     """Provides the live MJPEG video stream from the camera."""
@@ -385,10 +403,21 @@ async def admin(request: Request, db: Session = Depends(get_db)):
         users = db.query(User).order_by(User.name).all()
         
         # Only fetch logs that have an associated user to avoid template errors (log.user.name)
+        # Using inner join to filter out orphaned logs
         logs = db.query(Attendance).join(User, Attendance.user_id == User.id).order_by(Attendance.timestamp.desc()).limit(10).all()
         
-        trends = analytics.get_weekly_trends()
-        risks = analytics.predict_risk_users()
+        # Safeguard analytics results for template rendering
+        try:
+            trends = analytics.get_weekly_trends()
+        except Exception as e:
+            logging.warning(f"Failed to fetch weekly trends: {e}")
+            trends = {"labels": [], "present": [], "tardy": [], "absent": []}
+
+        try:
+            risks = analytics.predict_risk_users()
+        except Exception as e:
+            logging.warning(f"Failed to predict risk users: {e}")
+            risks = []
         
         return render_template(request, "admin.html", {
             "users": users, 
@@ -1044,12 +1073,38 @@ async def api_attendance_record(request: Request, db: Session = Depends(get_db),
             status = 'On Time' if now <= sch_start_dt + timedelta(minutes=15) else 'Late'
             
             # Record via SyncEngine (Producer)
-            sync_engine.record_attendance(user_id=uid, status=status)
+            if sync_engine:
+                sync_engine.record_attendance(user_id=uid, status=status)
+            else:
+                # Fallback to direct DB recording if sync_engine is disabled
+                record = Attendance(
+                    sync_key=str(uuid.uuid4()),
+                    user_id=uid,
+                    status=status,
+                    device_id=settings.DEVICE_ID,
+                    synced=0
+                )
+                db.add(record)
+                db.commit()
+            
             message = f"Login successful for {user.name}."
 
         elif action.lower() == 'logout':
             redis.srem(live_set_key, uid)
-            sync_engine.record_attendance(user_id=uid, status='Logout')
+            if sync_engine:
+                sync_engine.record_attendance(user_id=uid, status='Logout')
+            else:
+                # Fallback to direct DB recording if sync_engine is disabled
+                record = Attendance(
+                    sync_key=str(uuid.uuid4()),
+                    user_id=uid,
+                    status='Logout',
+                    device_id=settings.DEVICE_ID,
+                    synced=0
+                )
+                db.add(record)
+                db.commit()
+            
             message = f"Logout successful for {user.name}."
         
         else:
@@ -1136,6 +1191,15 @@ async def advanced_analytics_data(
     - Fetches data based on the provided filters (date range, employment type, user).
     - Returns weekly trends, monthly trends, status distribution, peak arrival times, and risk predictions.
     """
+    # Create a cache key based on the query parameters
+    cache_key = f"{start_date}-{end_date}-{employment_type}-{user_id}"
+    
+    # Check if the data is in the cache
+    if cache_key in analytics_cache:
+        logging.info(f"Serving analytics data from cache for key: {cache_key}")
+        return JSONResponse(analytics_cache[cache_key])
+
+    logging.info(f"Cache miss. Generating new analytics data for key: {cache_key}")
     analytics = AnalyticsEngine(db)
     
     # Parse dates if provided
@@ -1166,13 +1230,21 @@ async def advanced_analytics_data(
     # Risk users
     risks = analytics.predict_risk_users()
     
-    return JSONResponse({
+    # Advanced insights
+    insights = analytics.get_advanced_insights(start, end, employment_type, user_id)
+    
+    # Store the result in the cache
+    result = {
         "weekly_trends": weekly,
         "monthly_trends": monthly,
         "status_distribution": status_dist,
         "peak_arrival": peak,
-        "risk_users": risks
-    })
+        "risk_users": risks,
+        "insights": insights
+    }
+    analytics_cache[cache_key] = result
+    
+    return JSONResponse(result)
 
 @app.post("/request_early_report")
 async def request_early_report(request: Request, staff_code: str = Form(...), db: Session = Depends(get_db)):

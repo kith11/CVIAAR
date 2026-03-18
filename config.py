@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str | None = None # For Supabase/Postgres
     SUPABASE_URL: str | None = None
     SUPABASE_KEY: str | None = None
+    SYNC_ENABLED: bool = True # Enable or disable the sync worker
 
     # Upstash Redis for Live Layer
     UPSTASH_REDIS_URL: str

@@ -72,7 +72,9 @@ class SyncEngine:
             'total_synced': 0,
             'total_failed': 0,
             'last_sync_time': None,
-            'last_error': None
+            'last_error': None,
+            'consecutive_failures': 0,
+            'disabled': False
         }
 
         self._last_absence_marked_date: str | None = None
@@ -147,6 +149,11 @@ class SyncEngine:
     def _sync_worker(self):
         """The main loop for the background sync worker."""
         while not self.stop_sync.is_set():
+            if self.sync_stats['disabled']:
+                logger.warning("Sync worker is disabled due to consecutive failures. Restart application to retry.")
+                self.stop_sync.wait(3600) # Wait an hour before checking again if still disabled
+                continue
+
             try:
                 today = datetime.now().date()
                 target = today - timedelta(days=1)
@@ -159,10 +166,17 @@ class SyncEngine:
 
                 if self._check_internet():
                     self._sync_pending()
-                self.stop_sync.wait(self.sync_interval)
+                
+                # Dynamic sync interval based on success/failure
+                interval = self.sync_interval
+                if self.sync_stats['consecutive_failures'] > 0:
+                    interval = min(self.sync_interval * (2 ** self.sync_stats['consecutive_failures']), 300) # Max 5 mins
+                
+                self.stop_sync.wait(interval)
             except Exception as e:
-                logger.error(f"Sync error: {e}")
-                time.sleep(5)
+                logger.error(f"Sync worker loop error: {e}")
+                self.sync_stats['consecutive_failures'] += 1
+                time.sleep(10)
 
     def _check_internet(self) -> bool:
         """Checks for an active internet connection."""
@@ -175,6 +189,11 @@ class SyncEngine:
 
     def _sync_pending(self):
         """Fetches pending records from the local DB and attempts to sync them."""
+        if self.sync_stats['consecutive_failures'] > 10:
+            logger.error("Sync disabled due to too many failures.")
+            self.sync_stats['disabled'] = True
+            return
+
         with self.sync_lock:
             local_session = self.Session()
             try:
@@ -207,9 +226,14 @@ class SyncEngine:
                     local_session.commit()
                     self.sync_stats['total_synced'] += len(pending)
                     self.sync_stats['last_sync_time'] = datetime.now()
+                    self.sync_stats['consecutive_failures'] = 0 # Reset on success
                 else:
                     self.sync_stats['total_failed'] += len(pending)
+                    self.sync_stats['consecutive_failures'] += 1
             except Exception as e:
+                self.sync_stats['total_failed'] += 1
+                self.sync_stats['last_error'] = str(e)
+                self.sync_stats['consecutive_failures'] += 1
                 logger.error(f"Error during _sync_pending: {e}")
             finally:
                 local_session.close()

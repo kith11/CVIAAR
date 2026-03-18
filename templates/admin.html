@@ -232,9 +232,9 @@
                     <td class="text-center"><span class="text-danger fw-bold">${user.absent}</span></td>
                     <td class="text-end pe-4">
                         <div class="btn-group btn-group-sm">
-                            <a href="/edit_user/{{ user.id }}" class="btn btn-sm btn-outline-primary border-0" title="Edit Profile"><i class="bi bi-pencil"></i></a>
-                            <a href="/generate_report_form/{{ user.id }}" class="btn btn-sm btn-outline border-0" title="Report"><i class="bi bi-file-earmark-text"></i></a>
-                            <button class="btn btn-sm btn-outline border-0" onclick="confirmDelete({{ user.id }}, '{{ user.name }}')" title="Delete"><i class="bi bi-trash"></i></button>
+                            <a href="/edit_user/${user.id}" class="btn btn-sm btn-outline-primary border-0" title="Edit Profile"><i class="bi bi-pencil"></i></a>
+                            <a href="/generate_report_form/${user.id}" class="btn btn-sm btn-outline border-0" title="Report"><i class="bi bi-file-earmark-text"></i></a>
+                            <button class="btn btn-sm btn-outline border-0" onclick="confirmDelete(${user.id}, '${user.name}')" title="Delete"><i class="bi bi-trash"></i></button>
                         </div>
                     </td>
                 `;

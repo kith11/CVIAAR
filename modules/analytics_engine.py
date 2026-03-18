@@ -348,3 +348,52 @@ class AnalyticsEngine:
             'data': data,
             'colors': colors
         }
+
+    def get_advanced_insights(self, start_date=None, end_date=None, employment_type=None, user_id=None):
+        """
+        Generates narrative insights based on attendance patterns, including anomalies and comparative indicators.
+        """
+        df = self.get_attendance_dataframe(start_date, end_date, employment_type, user_id)
+        if df.empty:
+            return ["No data available for the selected period."]
+
+        insights = []
+        
+        # 1. Punctuality & Comparative Performance
+        total = len(df)
+        on_time = len(df[df['status'].isin(['Present', 'On Time'])])
+        late = len(df[df['status'].isin(['Late', 'Tardy'])])
+        punctuality_rate = (on_time / total * 100) if total > 0 else 0
+        
+        # Comparative indicator (vs 85% target)
+        diff = punctuality_rate - 85
+        comparison = "above" if diff >= 0 else "below"
+        insights.append(f"Current punctuality rate is {punctuality_rate:.1f}%, which is {abs(diff):.1f}% {comparison} the organizational benchmark of 85%.")
+
+        # 2. Peak Time & Anomaly Detection
+        if not df.empty:
+            arrivals = df[df['status'].isin(['Present', 'On Time', 'Late', 'Tardy'])]
+            if not arrivals.empty:
+                peak_hour = arrivals['hour'].mode().iloc[0]
+                peak_count = len(arrivals[arrivals['hour'] == peak_hour])
+                
+                # Check for anomalies (e.g., unexpected late night check-ins)
+                off_hours = arrivals[~arrivals['hour'].between(6, 20)]
+                if not off_hours.empty:
+                    insights.append(f"Anomaly detected: {len(off_hours)} check-ins occurred outside standard business hours (6AM-8PM).")
+                
+                insights.append(f"Peak arrival efficiency: {peak_count} check-ins consolidated at {peak_hour}:00, suggesting high terminal utilization during this window.")
+
+        # 3. Weekly Trends & Engagement
+        weekly = self.get_weekly_trends(start_date, end_date, employment_type, user_id)
+        max_present = max(weekly['present'])
+        if max_present > 0:
+            best_day_idx = weekly['present'].index(max_present)
+            days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            
+            # Comparative weekly analysis
+            avg_present = sum(weekly['present']) / 7
+            performance = (max_present / avg_present * 100) - 100 if avg_present > 0 else 0
+            insights.append(f"{days[best_day_idx]} is the highest engagement day, outperforming the weekly average by {performance:.1f}%.")
+
+        return insights
