@@ -31,7 +31,7 @@ class FaceEngine:
     def __init__(self, 
                  model_path: str = "data/lbph_model.yml", 
                  faces_dir: str = "data/faces",
-                 process_interval_ms: int = 100): # Reasonable interval
+                 process_interval_ms: int = 50): # Highly responsive
         
         self.model_path = model_path
         self.faces_dir = faces_dir
@@ -213,9 +213,9 @@ class FaceEngine:
             elif ear >= self.ear_threshold:  # Eyes opening
                 # Validate blink duration (not too short, not too long)
                 blink_duration = now - self.eye_closed_start_time
-                if 0.15 <= blink_duration <= 1.0:  # Valid blink duration: 150ms to 1s
+                if 0.1 <= blink_duration <= 1.0:  # Faster detection: 100ms minimum
                     # Additional debounce check
-                    if now - self.last_blink_time > 0.3:  # Minimum 300ms between blinks
+                    if now - self.last_blink_time > 0.2:  # Reduced debounce for faster verification
                         blink_completed = True
                         self.blink_count += 1
                         self.last_blink_time = now

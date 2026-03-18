@@ -376,7 +376,7 @@
                     video.srcObject = stream;
                     statusMsg.textContent = "Scanning for identity...";
                     statusOverlay.style.background = "rgba(0,0,0,0.5)";
-                    processIntervalId = setInterval(processFrame, 250);
+                    processIntervalId = setInterval(processFrame, 150);
                 })
                 .catch(err => {
                     console.error("Camera error:", err);
@@ -398,7 +398,7 @@
             captureCanvas.width = video.videoWidth;
             captureCanvas.height = video.videoHeight;
             captureCtx.drawImage(video, 0, 0);
-            const dataURL = captureCanvas.toDataURL('image/jpeg', 0.6); 
+            const dataURL = captureCanvas.toDataURL('image/jpeg', 0.7); 
 
             recognizeBusy = true;
 

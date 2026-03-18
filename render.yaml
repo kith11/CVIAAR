@@ -19,6 +19,9 @@ services:
         sync: false
       - key: UPSTASH_REDIS_TOKEN
         sync: false
+      - key: PYTHON_VERSION
+        value: 3.10.12
+    healthCheckPath: /api/live-status
     # Persistent disk for SQLite and Face data
     disk:
       name: cviaar-data

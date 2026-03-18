@@ -30,8 +30,10 @@ build/
 
 # Rust
 cviaar-analytics/
+cviaar-vision/
 target/
 Cargo.lock
+Cargo.toml
 
 # Other
 *.log

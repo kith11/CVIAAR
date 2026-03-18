@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     """Threshold for the LBPH face recognizer. Lower is stricter."""
     RECOGNITION_CACHE_TTL_SEC: float = 2.0
     """How long to cache a recognized face to avoid re-processing."""
-    BLINK_EAR_THRESHOLD: float = 0.21
+    BLINK_EAR_THRESHOLD: float = 0.22
     """Eye Aspect Ratio threshold to trigger blink detection. A lower value makes it less sensitive to slight eye movements."""
     BLINK_MAX_CLOSED_SEC: float = 2.5
     """Maximum duration for eyes to be closed before resetting the blink detector."""
