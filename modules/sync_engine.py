@@ -215,7 +215,9 @@ class SyncEngine:
                             'timestamp': r.timestamp.isoformat(),
                             'status': r.status,
                             'notes': r.notes,
-                            'device_id': r.device_id
+                            'device_id': r.device_id,
+                            'synced': 1,
+                            'synced_at': datetime.now().isoformat()
                         })
                     sync_success = self._upsert_supabase(batch)
                 
@@ -328,16 +330,26 @@ class SyncEngine:
             url = f"{base_url}/rest/v1/attendance_logs"
             
             logger.info(f"Attempting to sync {len(batch)} records to {url}")
+            # Log the first record as a sample (masking keys if any, but batch is data)
+            if batch:
+                logger.debug(f"Sample record: {batch[0]}")
+
             resp = requests.post(url, json=batch, headers=headers, timeout=10)
             
-            if resp.status_code in [200, 201]:
-                logger.info(f"Successfully synced {len(batch)} records.")
+            if resp.status_code in [200, 201, 204]:
+                logger.info(f"Successfully synced {len(batch)} records. Status: {resp.status_code}")
                 return True
             else:
                 logger.error(f"Failed to sync records. Status: {resp.status_code}, Response: {resp.text}")
+                # Log headers for debugging (excluding sensitive info)
+                safe_headers = {k: v if k.lower() not in ['apikey', 'authorization'] else '[MASKED]' for k, v in headers.items()}
+                logger.error(f"Request Headers: {safe_headers}")
                 return False
+        except requests.exceptions.RequestException as re:
+            logger.error(f"Network error during Supabase sync: {re}")
+            return False
         except Exception as e:
-            logger.error(f"Exception during Supabase sync: {e}")
+            logger.error(f"Unexpected exception during Supabase sync: {e}")
             return False
 
     def record_attendance(self, user_id: int, status: str, notes: str = None) -> str:

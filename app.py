@@ -288,8 +288,8 @@ if settings.APP_ROLE == "LOCAL_KIOSK":
     if settings.SYNC_ENABLED:
         sync_engine = SyncEngine(
             database_url=db_url, # Use the common db_url
-            supabase_url=settings.SUPABASE_URL or "",
-            supabase_key=settings.SUPABASE_KEY or "",
+            supabase_url=settings.SUPABASE_URL or os.getenv("SUPABASE_URL", ""),
+            supabase_key=settings.SUPABASE_KEY or os.getenv("SUPABASE_KEY", ""),
             remote_db_url=settings.DATABASE_URL, # Use direct Postgres URL if provided
             sync_interval=30, # Sync every 30 seconds
             device_id=settings.DEVICE_ID
