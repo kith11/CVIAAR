@@ -1426,6 +1426,20 @@ async def request_early_report(request: Request, user_id: int = Form(...), db: S
         Attendance.timestamp >= start_of_month
     ).order_by(Attendance.timestamp.desc()).all()
 
+    analytics_engine = AnalyticsEngine(db)
+    
+    # Comprehensive analytics for the user
+    end_date = now.date()
+    start_date = end_date - timedelta(days=30)
+    
+    # Arrival patterns
+    peak_times = analytics_engine.get_peak_arrival_times(start_date, end_date, user_id=user.id)
+    peak_hour = max(peak_times, key=peak_times.get) if peak_times else None
+    peak_hour_fmt = f"{peak_hour:02d}:00" if peak_hour is not None else "N/A"
+    
+    # Weekly comparison
+    weekly_comp = analytics_engine._get_weekly_comparison(end_date - timedelta(days=7), end_date, None, user.id)
+    
     on_time_arrivals = sum(1 for log in logs if log.status in ["On Time", "Present"])
     late_arrivals = sum(1 for log in logs if log.status in ["Late", "Tardy"])
     total_arrivals = on_time_arrivals + late_arrivals
@@ -1434,13 +1448,13 @@ async def request_early_report(request: Request, user_id: int = Form(...), db: S
     # Determine a motivational message based on the score.
     if punctuality_score >= 95:
         motivation = "Outstanding! Your commitment to punctuality is truly commendable. Keep up the fantastic work!"
-        motivation_color = "#38A169" # Green
+        motivation_color = "#198754" # Success Green
     elif punctuality_score >= 80:
         motivation = "Great job! You have a strong record of being on time. Let's aim for a perfect score!"
-        motivation_color = "#3182CE" # Blue
+        motivation_color = "#0d6efd" # Primary Blue
     else:
         motivation = "Every day is a new opportunity. Let's focus on making each arrival a timely one. You can do it!"
-        motivation_color = "#DD6B20" # Orange
+        motivation_color = "#fd7e14" # Warning Orange
 
     # Render the HTML for the email body using the new template.
     template = templates.get_template("email_report.html")
@@ -1454,7 +1468,10 @@ async def request_early_report(request: Request, user_id: int = Form(...), db: S
             "late": late_arrivals,
             "punctuality_score": f"{punctuality_score:.1f}",
             "motivation": motivation,
-            "motivation_color": motivation_color
+            "motivation_color": motivation_color,
+            "peak_hour": peak_hour_fmt,
+            "weekly_growth": weekly_comp.get("growth", 0),
+            "engagement_change": weekly_comp.get("engagement_change", 0)
         }
     })
 

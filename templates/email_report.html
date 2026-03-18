@@ -1,78 +1,113 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Your Attendance Report</title>
+    <!--[if mso]>
+    <style type="text/css">
+        body, table, td, h1, h2, h3, p, a, span { font-family: Arial, sans-serif !important; }
+    </style>
+    <![endif]-->
 </head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol'; margin: 0; padding: 20px; background-color: #f4f4f4;">
+<body style="margin: 0; padding: 0; background-color: #f8f9fc; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
 
-    <table width="100%" border="0" cellspacing="0" cellpadding="0">
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8f9fc; padding: 40px 20px;">
         <tr>
             <td align="center">
-                <table width="600" border="0" cellspacing="0" cellpadding="0" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); overflow: hidden;">
-                    <!-- Header -->
+                <!-- Email Container -->
+                <table width="600" border="0" cellspacing="0" cellpadding="0" style="background-color: #ffffff; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); overflow: hidden; border: 1px solid #e3e6f0;">
+                    
+                    <!-- Branding Header -->
                     <tr>
-                        <td style="background-color: #4A5568; color: #ffffff; padding: 20px 30px;">
-                            <h1 style="margin: 0; font-size: 24px;">CVIAAR System</h1>
+                        <td style="background: linear-gradient(135deg, #4e73df 0%, #224abe 100%); padding: 40px 40px 30px 40px; text-align: left;">
+                            <div style="color: #ffffff; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 8px; opacity: 0.8;">CVIAAR Analytics</div>
+                            <h1 style="margin: 0; font-size: 28px; font-weight: 800; color: #ffffff; letter-spacing: -0.02em;">Attendance Report</h1>
                         </td>
                     </tr>
-                    <!-- Body -->
-                    <tr>
-                        <td style="padding: 30px; color: #333333;">
-                            <h2 style="margin-top: 0; color: #2D3748;">Hi {{ user.name }},</h2>
-                            <p style="line-height: 1.6;">Here is your personalized attendance report for <strong>{{ report_date }}</strong>.</p>
 
-                            <!-- Monthly Snapshot -->
-                            <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 20px; background-color: #F7FAFC; border-radius: 8px; padding: 20px;">
+                    <!-- Main Content Area -->
+                    <tr>
+                        <td style="padding: 40px;">
+                            <h2 style="margin: 0 0 15px 0; color: #2d3436; font-size: 22px; font-weight: 700;">Hello, {{ user.name }}</h2>
+                            <p style="margin: 0 0 30px 0; font-size: 16px; line-height: 1.6; color: #636e72;">Here is your performance snapshot for <strong>{{ report_date }}</strong>. We've analyzed your recent arrival patterns to provide these insights.</p>
+
+                            <!-- Performance Score Card -->
+                            <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8f9fc; border-radius: 8px; padding: 25px; border: 1px solid #e3e6f0; margin-bottom: 35px;">
                                 <tr>
-                                    <td colspan="3" style="padding-bottom: 15px; border-bottom: 1px solid #E2E8F0;">
-                                        <h3 style="margin: 0; font-size: 18px; color: #2D3748;">Monthly Snapshot</h3>
+                                    <td colspan="3" style="padding-bottom: 20px;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                                            <span style="font-size: 14px; font-weight: 700; color: #4e73df; text-transform: uppercase; letter-spacing: 0.05em;">Performance Score</span>
+                                            <span style="font-size: 12px; padding: 4px 10px; background-color: #eaecf4; border-radius: 20px; color: #4e73df; font-weight: 600;">Monthly View</span>
+                                        </div>
                                     </td>
                                 </tr>
                                 <tr>
-                                    <td align="center" style="padding-top: 15px;">
-                                        <p style="font-size: 24px; font-weight: bold; color: #38A169; margin: 0;">{{ analytics.on_time }}</p>
-                                        <p style="font-size: 14px; color: #718096; margin: 5px 0 0 0;">On-Time</p>
+                                    <td align="center" style="width: 33%;">
+                                        <div style="font-size: 32px; font-weight: 800; color: #1cc88a; margin-bottom: 4px;">{{ analytics.on_time }}</div>
+                                        <div style="font-size: 11px; color: #858796; font-weight: 700; text-transform: uppercase;">Present</div>
                                     </td>
-                                    <td align="center" style="padding-top: 15px;">
-                                        <p style="font-size: 24px; font-weight: bold; color: #DD6B20; margin: 0;">{{ analytics.late }}</p>
-                                        <p style="font-size: 14px; color: #718096; margin: 5px 0 0 0;">Late</p>
+                                    <td align="center" style="width: 34%; border-left: 1px solid #e3e6f0; border-right: 1px solid #e3e6f0;">
+                                        <div style="font-size: 32px; font-weight: 800; color: #f6c23e; margin-bottom: 4px;">{{ analytics.late }}</div>
+                                        <div style="font-size: 11px; color: #858796; font-weight: 700; text-transform: uppercase;">Tardy</div>
                                     </td>
-                                    <td align="center" style="padding-top: 15px;">
-                                        <p style="font-size: 24px; font-weight: bold; color: #3182CE; margin: 0;">{{ analytics.punctuality_score }}%</p>
-                                        <p style="font-size: 14px; color: #718096; margin: 5px 0 0 0;">Punctuality</p>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td colspan="3" style="padding-top: 20px; text-align: center;">
-                                        <p style="font-style: italic; color: {{ analytics.motivation_color }}; margin: 0;">"{{ analytics.motivation }}"</p>
+                                    <td align="center" style="width: 33%;">
+                                        <div style="font-size: 32px; font-weight: 800; color: #4e73df; margin-bottom: 4px;">{{ analytics.punctuality_score }}%</div>
+                                        <div style="font-size: 11px; color: #858796; font-weight: 700; text-transform: uppercase;">Engagement</div>
                                     </td>
                                 </tr>
                             </table>
 
-                            <!-- Recent Activity -->
-                            <h3 style="margin-top: 30px; font-size: 18px; color: #2D3748;">Recent Activity</h3>
-                            <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 10px; border-collapse: collapse;">
-                                <thead>
-                                    <tr style="background-color: #EDF2F7;">
-                                        <th style="padding: 12px; border-bottom: 2px solid #E2E8F0; text-align: left; color: #4A5568;">Date</th>
-                                        <th style="padding: 12px; border-bottom: 2px solid #E2E8F0; text-align: left; color: #4A5568;">Timestamp</th>
-                                        <th style="padding: 12px; border-bottom: 2px solid #E2E8F0; text-align: left; color: #4A5568;">Status</th>
+                            <!-- Detailed Insights Grid -->
+                            <h3 style="font-size: 16px; font-weight: 700; color: #2d3436; margin: 0 0 15px 0;">Analytical Insights</h3>
+                            <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 35px;">
+                                <tr>
+                                    <!-- Peak Hour -->
+                                    <td style="width: 48%; padding: 15px; background-color: #ffffff; border: 1px solid #e3e6f0; border-radius: 8px;">
+                                        <div style="font-size: 11px; color: #858796; font-weight: 700; text-transform: uppercase; margin-bottom: 8px;">Peak Arrival</div>
+                                        <div style="font-size: 18px; font-weight: 700; color: #2d3436;">{{ analytics.peak_hour }}</div>
+                                        <div style="font-size: 12px; color: #1cc88a; margin-top: 4px; font-weight: 600;">Most frequent window</div>
+                                    </td>
+                                    <td style="width: 4%;"></td>
+                                    <!-- Growth -->
+                                    <td style="width: 48%; padding: 15px; background-color: #ffffff; border: 1px solid #e3e6f0; border-radius: 8px;">
+                                        <div style="font-size: 11px; color: #858796; font-weight: 700; text-transform: uppercase; margin-bottom: 8px;">Weekly Change</div>
+                                        <div style="font-size: 18px; font-weight: 700; color: {% if analytics.weekly_growth >= 0 %}#1cc88a{% else %}#e74a3b{% endif %};">
+                                            {% if analytics.weekly_growth >= 0 %}+{% endif %}{{ analytics.weekly_growth }}%
+                                        </div>
+                                        <div style="font-size: 12px; color: #858796; margin-top: 4px;">vs Previous Week</div>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <!-- Motivation Banner -->
+                            <div style="padding: 20px; border-radius: 8px; background-color: {{ analytics.motivation_color }}10; border-left: 4px solid {{ analytics.motivation_color }}; margin-bottom: 35px;">
+                                <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #2d3436; font-style: italic;">
+                                    "{{ analytics.motivation }}"
+                                </p>
+                            </div>
+
+                            <!-- Recent Log Table -->
+                            <h3 style="font-size: 16px; font-weight: 700; color: #2d3436; margin: 0 0 15px 0;">Recent Activity</h3>
+                            <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse; border: 1px solid #e3e6f0; border-radius: 8px; overflow: hidden;">
+                                <thead style="background-color: #f8f9fc;">
+                                    <tr>
+                                        <th style="padding: 12px 15px; text-align: left; font-size: 11px; font-weight: 700; color: #858796; text-transform: uppercase; border-bottom: 1px solid #e3e6f0;">Date</th>
+                                        <th style="padding: 12px 15px; text-align: left; font-size: 11px; font-weight: 700; color: #858796; text-transform: uppercase; border-bottom: 1px solid #e3e6f0;">Time</th>
+                                        <th style="padding: 12px 15px; text-align: right; font-size: 11px; font-weight: 700; color: #858796; text-transform: uppercase; border-bottom: 1px solid #e3e6f0;">Status</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {% for log in logs %}
-                                    <tr style="border-bottom: 1px solid #EDF2F7;">
-                                        <td style="padding: 12px;">{{ log.timestamp.strftime('%Y-%m-%d') }}</td>
-                                        <td style="padding: 12px;">{{ log.timestamp.strftime('%I:%M:%S %p') }}</td>
-                                        <td style="padding: 12px;">
-                                            <span style="padding: 5px 10px; border-radius: 15px; font-size: 12px; color: #ffffff;
-                                                {% if log.status in ['On Time', 'Present'] %} background-color: #38A169; /* Green */
-                                                {% elif log.status in ['Late', 'Tardy'] %} background-color: #DD6B20; /* Orange */
-                                                {% elif log.status == 'Logout' %} background-color: #718096; /* Gray */
-                                                {% else %} background-color: #E53E3E; /* Red */
+                                    <tr>
+                                        <td style="padding: 12px 15px; font-size: 14px; color: #2d3436; border-bottom: 1px solid #f1f3f9;">{{ log.timestamp.strftime('%b %d') }}</td>
+                                        <td style="padding: 12px 15px; font-size: 14px; color: #636e72; border-bottom: 1px solid #f1f3f9;">{{ log.timestamp.strftime('%I:%M %p') }}</td>
+                                        <td style="padding: 12px 15px; text-align: right; border-bottom: 1px solid #f1f3f9;">
+                                            <span style="font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 4px; text-transform: uppercase; 
+                                                {% if log.status in ['On Time', 'Present'] %} background-color: #1cc88a15; color: #1cc88a;
+                                                {% elif log.status in ['Late', 'Tardy'] %} background-color: #f6c23e15; color: #f6c23e;
+                                                {% elif log.status == 'Logout' %} background-color: #85879615; color: #858796;
+                                                {% else %} background-color: #e74a3b15; color: #e74a3b;
                                                 {% endif %}
                                             ">{{ log.status }}</span>
                                         </td>
@@ -82,11 +117,33 @@
                             </table>
                         </td>
                     </tr>
-                    <!-- Footer -->
+
+                    <!-- Footer Area -->
                     <tr>
-                        <td style="background-color: #F7FAFC; padding: 20px 30px; text-align: center; color: #718096; font-size: 12px;">
-                            <p style="margin: 0;">This is an automated report from the CVIAAR System.</p>
-                            <p style="margin: 5px 0 0 0;">&copy; {{ current_year }} CVIAAR. All rights reserved.</p>
+                        <td style="background-color: #f8f9fc; padding: 30px 40px; border-top: 1px solid #e3e6f0;">
+                            <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                                <tr>
+                                    <td style="text-align: center;">
+                                        <div style="font-size: 12px; color: #858796; margin-bottom: 10px;">
+                                            This is an automated performance report generated by the CVIAAR Biometric System.
+                                        </div>
+                                        <div style="font-size: 12px; color: #b7b9cc; font-weight: 600;">
+                                            &copy; {{ current_year }} CVIAAR AI. All rights reserved.
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+                
+                <!-- Extra Footer Padding -->
+                <table width="600" border="0" cellspacing="0" cellpadding="0">
+                    <tr>
+                        <td style="padding: 20px 0; text-align: center;">
+                            <p style="font-size: 11px; color: #b7b9cc; margin: 0;">
+                                You are receiving this because you are enrolled in the CVIAAR attendance system.
+                            </p>
                         </td>
                     </tr>
                 </table>
