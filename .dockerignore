@@ -1,17 +1,38 @@
+.git
+.gitignore
+.dockerignore
+README.md
+DOCUMENTATION.md
+docker-compose.yml
+
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
+*.pyd
+
+# Environment
 .env
 venv/
 .venv/
+
+# Databases
 data/attendance.db
-data/faces/
 *.db
+
+# macOS
 .DS_Store
-.git/
-.gitignore
-Dockerfile
-docker-compose.yml
+
+# Build artifacts
 dist/
 build/
 *.spec
+
+# Rust
+cviaar-analytics/
+target/
+Cargo.lock
+
+# Other
+*.log
+.idea/

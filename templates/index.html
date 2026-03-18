@@ -30,7 +30,7 @@
         <div class="small text-muted text-uppercase fw-bold" id="clock-date">-- -- ----</div>
     </div>
     <!-- Standby Overlay -->
-    <div id="standby-overlay" class="standby-overlay d-none">
+    <div id="standby-overlay" class="standby-overlay d-none" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 9999; display: none;">
         <div class="standby-bg"></div>
         <div class="standby-inner">
             <div class="standby-title">Research Team Credits</div>
@@ -232,6 +232,13 @@
         font-size: 1.05rem;
         white-space: nowrap;
         opacity: 0.88;
+        animation: float 6s ease-in-out infinite;
+    }
+
+    @keyframes float {
+        0% { transform: translateY(0px); }
+        50% { transform: translateY(-20px); }
+        100% { transform: translateY(0px); }
     }
 
     @media (max-width: 768px) {
@@ -585,15 +592,26 @@
         const standbyNamesEl = document.getElementById('standby-names');
         let standbyActive = false;
         let lastActivity = Date.now();
-        const STANDBY_AFTER_MS = 300000; // 5 minutes of inactivity
+        const STANDBY_AFTER_MS = 30000; // Reduced to 30 seconds for testing
+
+        console.log('Standby mode initialized:', {
+            overlay: standbyOverlay,
+            namesEl: standbyNamesEl,
+            active: standbyActive,
+            lastActivity: lastActivity,
+            timeout: STANDBY_AFTER_MS
+        });
 
         function markActivity() {
             lastActivity = Date.now();
             if (standbyActive) {
                 standbyActive = false;
                 standbyOverlay.classList.add('d-none');
+                // Hide the overlay completely
+                standbyOverlay.style.display = 'none';
                 // Resume camera when leaving standby
                 startCamera();
+                console.log('Exiting standby mode');
             }
         }
 
@@ -607,6 +625,7 @@
                 const span = document.createElement('span');
                 span.className = 'standby-name';
                 span.textContent = name;
+                span.style.animationDelay = `${index * 0.5}s`;
                 standbyNamesEl.appendChild(span);
             });
         }
@@ -617,8 +636,12 @@
                 standbyActive = true;
                 createFloatingNames();
                 standbyOverlay.classList.remove('d-none');
+                // Make sure the overlay is visible and on top
+                standbyOverlay.style.display = 'flex';
+                standbyOverlay.style.zIndex = '9999';
                 // Disable camera while in standby
                 stopCamera();
+                console.log('Entering standby mode');
             }
             requestAnimationFrame(standbyLoop);
         }

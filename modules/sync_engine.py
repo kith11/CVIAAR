@@ -2,7 +2,7 @@ import threading
 import time
 import requests
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -75,6 +75,8 @@ class SyncEngine:
             'last_error': None
         }
 
+        self._last_absence_marked_date: str | None = None
+
     def start_sync_worker(self):
         """Starts the background synchronization thread."""
         if self.sync_thread is None or not self.sync_thread.is_alive():
@@ -82,6 +84,59 @@ class SyncEngine:
             self.sync_thread = threading.Thread(target=self._sync_worker, daemon=True)
             self.sync_thread.start()
             logger.info("Sync worker thread started.")
+
+    def _auto_mark_absent_for_date(self, target_date: datetime.date) -> int:
+        session = self.Session()
+        try:
+            start = datetime(target_date.year, target_date.month, target_date.day, 0, 0, 0)
+            end = datetime(target_date.year, target_date.month, target_date.day, 23, 59, 59, 999999)
+
+            users = session.query(User).all()
+            created = 0
+            for user in users:
+                existing_any = (
+                    session.query(Attendance.id)
+                    .filter(
+                        Attendance.user_id == user.id,
+                        Attendance.timestamp >= start,
+                        Attendance.timestamp <= end,
+                    )
+                    .first()
+                )
+                if existing_any:
+                    continue
+
+                hh, mm = 6, 0
+                sch = (user.schedule_start or "").strip()
+                if len(sch) >= 5 and sch[2] == ":":
+                    try:
+                        hh = int(sch[:2])
+                        mm = int(sch[3:5])
+                    except Exception:
+                        hh, mm = 6, 0
+
+                record_ts = datetime(target_date.year, target_date.month, target_date.day, hh, mm, 0)
+                record = Attendance(
+                    sync_key=str(uuid.uuid4()),
+                    user_id=user.id,
+                    timestamp=record_ts,
+                    status="Absent",
+                    notes=None,
+                    device_id=self.device_id,
+                    synced=0,
+                )
+                session.add(record)
+                created += 1
+
+            if created:
+                session.commit()
+            return created
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Auto-absence marking error: {e}")
+            return 0
+        finally:
+            session.close()
 
     def stop_sync_worker(self):
         """Stops the background synchronization thread."""
@@ -93,6 +148,15 @@ class SyncEngine:
         """The main loop for the background sync worker."""
         while not self.stop_sync.is_set():
             try:
+                today = datetime.now().date()
+                target = today - timedelta(days=1)
+                target_key = target.isoformat()
+                if self._last_absence_marked_date != target_key:
+                    created = self._auto_mark_absent_for_date(target)
+                    self._last_absence_marked_date = target_key
+                    if created:
+                        logger.info(f"Auto-marked {created} absences for {target_key}.")
+
                 if self._check_internet():
                     self._sync_pending()
                 self.stop_sync.wait(self.sync_interval)

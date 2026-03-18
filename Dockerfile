@@ -1,5 +1,5 @@
 # Use an official Python runtime as a parent image
-FROM python:3.10-slim
+FROM python:3.10-slim as builder
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -20,11 +20,20 @@ RUN apt-get update && apt-get install -y \
     librsvg2-common \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the requirements file into the container at /app
+# Install Python dependencies
 COPY requirements.txt /app/
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --default-timeout=600 --no-cache-dir -r requirements.txt
+# Final stage
+FROM python:3.10-slim
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Copy installed packages from builder stage
+COPY --from=builder /app/wheels /wheels
+COPY --from=builder /app/requirements.txt .
+RUN pip install --no-cache /wheels/*
 
 # Copy the rest of the application code
 COPY . /app

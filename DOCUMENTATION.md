@@ -63,6 +63,7 @@ flowchart LR
 3. If the face is verified (blink within TTL), the UI allows Log in/Log out.
 4. Attendance records are stored locally via `SyncEngine.record_attendance(...)`.
 5. Background sync worker uploads pending records to remote DB when network is available.
+6. Background sync worker auto-marks **Absent** for the previous day if a user has no records for that date.
 
 ## 3) Repository Structure
 
@@ -110,6 +111,14 @@ These are read at runtime from environment variables (see [app.py](file:///c:/Us
 - `MIN_FACE_SIZE_PX` (default `90`): Ignore tiny/far faces to reduce mislabeling.
 - `RECOGNITION_STREAK_REQUIRED` (default `2`): Required consecutive matches before accepting a label.
 - `RECOGNITION_STREAK_TIMEOUT_SEC` (default `1.0`): Time window for streak accumulation.
+
+### 4.6 Auto-Absence Marking
+
+The kiosk sync worker auto-creates an `Absent` record for **yesterday** for any user that has **no attendance records** on that date. This ensures analytics (weekly/monthly trends and risk prediction) reflect absences even if no one logged in/out.
+
+- Implemented in [SyncEngine](file:///c:/Users/keith/Downloads/projectCVI3/modules/sync_engine.py)
+- Runs in the background worker loop (no extra endpoint required)
+- Timestamp used for the `Absent` record is based on the user’s `schedule_start` (defaults to `06:00` if missing)
 
 ## 5) Setup Guide (Developers)
 
@@ -304,4 +313,3 @@ If timestamps are off in containerized deployments, ensure the container timezon
 - **EAR**: Eye Aspect Ratio, used to detect blinks for liveness verification.
 - **TTL**: Time-to-live window (seconds) for verification caching.
 - **Offline-first**: Always writes locally first; syncs later when network is available.
-

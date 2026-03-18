@@ -1,17 +1,29 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Environment
 .env
 venv/
 .venv/
+
+# Databases
 data/attendance.db
-data/faces/
 *.db
+
+# macOS
 .DS_Store
+
+# Build artifacts
 dist/
 build/
 *.spec
-*.ctl
-gunicorn.ctl
-data/
-!data/.gitkeep
+
+# Rust
+target/
+Cargo.lock
+
+# Other
+*.log
+.idea/

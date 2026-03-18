@@ -385,18 +385,65 @@ async def advanced_analytics(request: Request, db: Session = Depends(get_db)):
         "employment_types": ["All", "Full-time", "Part-time", "Contractor"]
     })
 
-@app.get("/audit_logs", response_class=HTMLResponse)
-async def audit_logs(request: Request, db: Session = Depends(get_db)):
-    """
-    Displays a log of all edits made to attendance records.
-    - Requires admin login.
-    """
+@app.get("/edit_user/{user_id}", response_class=HTMLResponse)
+async def edit_user_get(request: Request, user_id: int, db: Session = Depends(get_db)):
+    """Serves the user profile editing page."""
     if not request.session.get("logged_in") or request.session.get("role") != "admin":
         return RedirectResponse(url="/login")
-
-    edits = db.query(AttendanceEdit, Attendance, User).join(Attendance, AttendanceEdit.attendance_id == Attendance.id).join(User, Attendance.user_id == User.id).order_by(AttendanceEdit.edited_at.desc()).all()
     
-    return render_template(request, "audit_logs.html", {"edits": edits})
+    user = db.get(User, user_id)
+    if not user:
+        request.state.flash("User not found.", "danger")
+        return RedirectResponse(url="/admin", status_code=303)
+    
+    return render_template(request, "edit_user.html", {"user": user})
+
+@app.post("/update_user/{user_id}")
+async def update_user_post(request: Request, user_id: int, 
+                           name: str = Form(...),
+                           email: str = Form(...),
+                           employment_type: str = Form(...),
+                           schedule_start: str = Form("06:00"),
+                           schedule_end: str = Form("19:00"),
+                           role: str = Form("staff"),
+                           db: Session = Depends(get_db)):
+    """Handles user profile updates."""
+    if not request.session.get("logged_in") or request.session.get("role") != "admin":
+        return RedirectResponse(url="/login")
+    
+    user = db.get(User, user_id)
+    if not user:
+        request.state.flash("User not found.", "danger")
+        return RedirectResponse(url="/admin", status_code=303)
+    
+    # Validate email format
+    if not email or '@' not in email or not email.strip():
+        request.state.flash("Please enter a valid email address.", "danger")
+        return RedirectResponse(url=f"/edit_user/{user_id}", status_code=303)
+    
+    # Validate Gmail address
+    if not email.endswith('@gmail.com'):
+        request.state.flash("Please enter a valid Gmail address (must end with @gmail.com).", "danger")
+        return RedirectResponse(url=f"/edit_user/{user_id}", status_code=303)
+    
+    # Check if email is already taken by another user
+    existing_user = db.query(User).filter(User.email == email, User.id != user_id).first()
+    if existing_user:
+        request.state.flash("This email address is already in use by another user.", "danger")
+        return RedirectResponse(url=f"/edit_user/{user_id}", status_code=303)
+    
+    # Update user data
+    user.name = name.strip()
+    user.email = email.strip()
+    user.employment_type = employment_type
+    user.schedule_start = schedule_start
+    user.schedule_end = schedule_end
+    user.role = role
+    
+    db.commit()
+    
+    request.state.flash(f"User profile for {user.name} updated successfully.", "success")
+    return RedirectResponse(url="/admin", status_code=303)
 
 @app.get("/export_attendance_csv")
 async def export_attendance_csv(request: Request, db: Session = Depends(get_db)):
