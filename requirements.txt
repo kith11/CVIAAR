@@ -21,3 +21,4 @@ pydantic-settings>=2.2.0
 pywebview>=4.4.0
 waitress>=3.0.0
 cachetools>=5.3.0
+reportlab>=4.1.0
