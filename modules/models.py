@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, inspect, text
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
 import uuid
@@ -56,11 +56,38 @@ class Attendance(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     timestamp = Column(DateTime, default=datetime.now)
     status = Column(String(20), nullable=False)
+    session = Column(String(2), nullable=True)
+    event_type = Column(String(20), nullable=True)
+    auto_generated = Column(Integer, default=0)
     notes = Column(String(200), nullable=True)
     device_id = Column(String(50), nullable=True)
     synced = Column(Integer, default=0) # 0: pending, 1: synced
     synced_at = Column(DateTime, nullable=True)
     user = relationship("User", back_populates="attendances")
+
+
+def ensure_attendance_schema(engine) -> None:
+    """Adds newer attendance columns to existing databases when needed."""
+    inspector = inspect(engine)
+    try:
+        existing_columns = {column["name"] for column in inspector.get_columns("attendance_logs")}
+    except Exception:
+        return
+
+    statements = []
+    if "session" not in existing_columns:
+        statements.append("ALTER TABLE attendance_logs ADD COLUMN session VARCHAR(2)")
+    if "event_type" not in existing_columns:
+        statements.append("ALTER TABLE attendance_logs ADD COLUMN event_type VARCHAR(20)")
+    if "auto_generated" not in existing_columns:
+        statements.append("ALTER TABLE attendance_logs ADD COLUMN auto_generated INTEGER DEFAULT 0")
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
 
 
 class AttendanceEdit(Base):

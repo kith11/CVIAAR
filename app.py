@@ -6,7 +6,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 # Conditional heavy imports based on APP_ROLE to allow scripts to run without full dependencies
-APP_ROLE = os.environ.get("APP_ROLE", "KIOSK")
+APP_ROLE = os.environ.get("APP_ROLE", "LOCAL_KIOSK")
 logging.info(f"APP_ROLE detected: {APP_ROLE}")
 
 if APP_ROLE == "ADMIN_DASHBOARD":
@@ -25,31 +25,30 @@ import sqlite3
 import csv
 import io
 import random
+import math
+import shutil
 import pytz
 import smtplib
 import traceback
 import json
 import asyncio
 import uuid
+from contextlib import contextmanager
 from typing import Optional, List, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from calendar import monthrange
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 from fastapi import FastAPI, Request, Response, Depends, HTTPException, Form, UploadFile, File, BackgroundTasks
-from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, JSONResponse
-from cachetools import TTLCache
+from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, JSONResponse, FileResponse
 
-# --- Caching --- #
-# In-memory cache with a 5-minute TTL and max size of 100 entries
-analytics_cache = TTLCache(maxsize=100, ttl=300)
-risk_cache = TTLCache(maxsize=1, ttl=3600) # Cache for 1 hour
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy import create_engine, text, select, func
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import sessionmaker, Session
 
 # Conditional numpy import for lighter script runs
@@ -73,12 +72,19 @@ except ImportError:
     local_redis = None
 
 from config import settings
-from modules.models import Base, User, Attendance, AttendanceEdit, ExcuseNote
+from modules.models import Base, User, Attendance, AttendanceEdit, ExcuseNote, ensure_attendance_schema
 # Heavy modules moved into conditional blocks below
 # from modules.camera import Camera
 # from modules.face_engine import FaceEngine
 # from modules.sync_engine import SyncEngine
 from modules.analytics_engine import AnalyticsEngine
+from modules.attendance_rules import (
+    ABSENT_STATUSES,
+    infer_event_type,
+    is_present_status,
+    normalize_session,
+)
+from modules.runtime_state import ThreadSafeTTLStore
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -87,6 +93,10 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("modules.sync_engine").setLevel(logging.INFO)
+
+# --- Thread-Safe Runtime State --- #
+analytics_cache = ThreadSafeTTLStore(maxsize=100, default_ttl=300)
+risk_cache = ThreadSafeTTLStore(maxsize=16, default_ttl=3600)
 
 # --- Core Application Setup ---
 # This section initializes the FastAPI application, configures middleware for sessions and
@@ -228,6 +238,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # Create tables on startup
 try:
     Base.metadata.create_all(bind=engine)
+    ensure_attendance_schema(engine)
     logging.info("Database tables initialized successfully.")
 except Exception as e:
     logging.error(f"Error initializing database tables: {e}")
@@ -304,23 +315,16 @@ else:
     face_engine = None
     sync_engine = None
 
-# --- Global State and Caches ---
-# These dictionaries are used for in-memory caching and state management to improve
-# performance and handle real-time user interactions.
-attendance_cache = {} # Caches the last attendance status for a user to prevent duplicate entries.
-recognized_faces = {} # Caches recognized faces to avoid re-processing every frame.
-login_attempts = {} # Tracks login attempts to prevent brute-force attacks.
-scan_state = {"status": "no_face", "name": None, "timestamp": 0} # Holds the current state of the scanner.
-face_verification_cache = {} # Caches liveness verification status based on blinks.
-
 # --- Environment-based Tunables ---
 # These functions allow tuning recognition parameters via environment variables without code changes.
 def _env_float(key: str, default: float) -> float:
     """Safely reads a float from environment variables, with a fallback default."""
     raw = os.getenv(key)
     if not raw: return default
-    try: return float(raw)
-    except: return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
 
 def _env_int(key: str, default: int) -> int:
     raw = os.getenv(key)
@@ -328,7 +332,7 @@ def _env_int(key: str, default: int) -> int:
         return default
     try:
         return int(raw)
-    except:
+    except (TypeError, ValueError):
         return default
 
 # Tunable parameters for face recognition and blink detection.
@@ -338,6 +342,431 @@ VERIFIED_TTL_SEC = _env_float("VERIFIED_TTL_SEC", 6.0)
 MIN_FACE_SIZE_PX = _env_int("MIN_FACE_SIZE_PX", 90)
 RECOGNITION_STREAK_REQUIRED = _env_int("RECOGNITION_STREAK_REQUIRED", 2)
 RECOGNITION_STREAK_TIMEOUT_SEC = _env_float("RECOGNITION_STREAK_TIMEOUT_SEC", 1.0)
+ATTENDANCE_DEDUP_WINDOW_SEC = _env_float("ATTENDANCE_DEDUP_WINDOW_SEC", 5.0)
+ENROLLMENT_CAPTURE_TARGET = _env_int("ENROLLMENT_CAPTURE_TARGET", 40)
+ENROLLMENT_POSE_BUCKETS = ("center", "left", "right", "up", "down")
+ENROLLMENT_BUCKET_TARGET = max(4, ENROLLMENT_CAPTURE_TARGET // len(ENROLLMENT_POSE_BUCKETS))
+
+# --- Global State and Caches ---
+attendance_cache = ThreadSafeTTLStore(maxsize=1000, default_ttl=max(ATTENDANCE_DEDUP_WINDOW_SEC * 2, 10.0))
+recognized_faces = ThreadSafeTTLStore(maxsize=512, default_ttl=RECOGNITION_STREAK_TIMEOUT_SEC)
+login_attempts = ThreadSafeTTLStore(maxsize=200, default_ttl=300.0)
+scan_state = ThreadSafeTTLStore(maxsize=1)
+scan_state.set("latest", {"status": "no_face", "name": None, "timestamp": 0})
+face_verification_cache = ThreadSafeTTLStore(maxsize=512, default_ttl=VERIFIED_TTL_SEC)
+recognition_rate_limit = ThreadSafeTTLStore(maxsize=1000, default_ttl=2.0)
+
+model_operation_lock = threading.Lock()
+model_mutation_lock = threading.Lock()
+
+
+class ModelBusyError(RuntimeError):
+    """Raised when a vision model operation cannot proceed safely."""
+
+
+@contextmanager
+def model_operation(timeout: float | None = None, message: str = "Face model is busy. Please try again."):
+    if not face_engine:
+        yield
+        return
+
+    acquired = model_operation_lock.acquire() if timeout is None else model_operation_lock.acquire(timeout=timeout)
+    if not acquired:
+        raise ModelBusyError(message)
+
+    try:
+        yield
+    finally:
+        model_operation_lock.release()
+
+
+def try_begin_model_mutation() -> bool:
+    if not face_engine:
+        return True
+    return model_mutation_lock.acquire(blocking=False)
+
+
+def end_model_mutation() -> None:
+    if face_engine and model_mutation_lock.locked():
+        model_mutation_lock.release()
+
+
+def safe_commit(db: Session, context: str) -> bool:
+    try:
+        db.commit()
+        return True
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logging.error("%s failed: %s", context, exc)
+        return False
+
+
+def generate_staff_code(db: Session, max_attempts: int = 25) -> str:
+    for _ in range(max_attempts):
+        candidate = f"{random.randint(0, 999999):06d}"
+        exists = db.query(User.id).filter(User.staff_code == candidate).first()
+        if not exists:
+            return candidate
+    raise RuntimeError("Unable to generate a unique staff code.")
+
+
+def get_enrollment_pose_counts(user_dir: str) -> dict[str, int]:
+    counts = {bucket: 0 for bucket in ENROLLMENT_POSE_BUCKETS}
+    if not os.path.exists(user_dir):
+        return counts
+
+    for name in os.listdir(user_dir):
+        if not name.lower().endswith(".jpg"):
+            continue
+        prefix = name.split("_", 1)[0].lower()
+        bucket = prefix if prefix in counts else "center"
+        counts[bucket] += 1
+    return counts
+
+
+def get_enrollment_total_count(user_dir: str) -> int:
+    if not os.path.exists(user_dir):
+        return 0
+    return sum(1 for name in os.listdir(user_dir) if name.lower().endswith(".jpg"))
+
+
+def suggest_next_pose(pose_counts: dict[str, int]) -> str:
+    priorities = {bucket: index for index, bucket in enumerate(ENROLLMENT_POSE_BUCKETS)}
+    return min(
+        ENROLLMENT_POSE_BUCKETS,
+        key=lambda bucket: (pose_counts.get(bucket, 0), priorities[bucket]),
+    )
+
+
+def pose_instruction(bucket: str) -> str:
+    instructions = {
+        "center": "Look straight at the camera.",
+        "left": "Turn your face slightly to the left.",
+        "right": "Turn your face slightly to the right.",
+        "up": "Lift your chin slightly upward.",
+        "down": "Lower your chin slightly downward.",
+    }
+    return instructions.get(bucket, "Look straight at the camera.")
+
+
+def is_capture_too_similar(user_dir: str, pose_bucket: str, face_img: np.ndarray) -> bool:
+    candidates = []
+    for name in os.listdir(user_dir):
+        if not name.lower().endswith(".jpg"):
+            continue
+        prefix = name.split("_", 1)[0].lower()
+        if prefix == pose_bucket:
+            path = os.path.join(user_dir, name)
+            candidates.append((os.path.getmtime(path), path))
+
+    if not candidates:
+        return False
+
+    latest_path = max(candidates, key=lambda item: item[0])[1]
+    previous = cv2.imread(latest_path, cv2.IMREAD_GRAYSCALE)
+    if previous is None:
+        return False
+
+    current = face_engine.preprocess_face(face_img)
+    previous = face_engine.preprocess_face(previous)
+    delta = float(np.mean(cv2.absdiff(previous, current)))
+    return delta < 8.0
+
+
+def get_present_set_key(target_date: date | None = None) -> str:
+    target = target_date or get_now().date()
+    return f"attendance:{target.isoformat()}:present"
+
+
+def build_attendance_fields(
+    status: str,
+    timestamp: datetime | None = None,
+    session: str | None = None,
+    event_type: str | None = None,
+    auto_generated: bool = False,
+) -> dict[str, Any]:
+    record_ts = timestamp or get_now()
+    return {
+        "timestamp": record_ts,
+        "session": normalize_session(session, record_ts),
+        "event_type": infer_event_type(status, event_type),
+        "auto_generated": 1 if auto_generated else 0,
+        "status": status,
+    }
+
+
+def latest_user_status_for_day(db: Session, user_id: int, target_date: date) -> str | None:
+    start = datetime.combine(target_date, datetime.min.time())
+    end = datetime.combine(target_date, datetime.max.time())
+    latest = (
+        db.query(Attendance)
+        .filter(
+            Attendance.user_id == user_id,
+            Attendance.timestamp >= start,
+            Attendance.timestamp <= end,
+        )
+        .order_by(Attendance.timestamp.desc())
+        .first()
+    )
+    return latest.status if latest else None
+
+
+def count_present_users_from_db(db: Session, target_date: date | None = None) -> int:
+    date_value = target_date or get_now().date()
+    start = datetime.combine(date_value, datetime.min.time())
+    end = datetime.combine(date_value, datetime.max.time())
+    logs = (
+        db.query(Attendance)
+        .filter(Attendance.timestamp >= start, Attendance.timestamp <= end)
+        .order_by(Attendance.user_id.asc(), Attendance.timestamp.desc())
+        .all()
+    )
+
+    latest_status_by_user: dict[int, str] = {}
+    for log in logs:
+        if log.user_id not in latest_status_by_user:
+            latest_status_by_user[log.user_id] = log.status
+
+    return sum(1 for status in latest_status_by_user.values() if is_present_status(status))
+
+
+def get_live_present_count(db: Session) -> int:
+    key = get_present_set_key()
+    if redis:
+        try:
+            return int(redis.scard(key))
+        except Exception as exc:
+            logging.warning("Falling back to DB live-status count after Redis error: %s", exc)
+    return count_present_users_from_db(db)
+
+
+def record_attendance_direct(
+    db: Session,
+    user_id: int,
+    status: str,
+    timestamp: datetime | None = None,
+    session: str | None = None,
+    event_type: str | None = None,
+    auto_generated: bool = False,
+) -> bool:
+    fields = build_attendance_fields(
+        status,
+        timestamp=timestamp,
+        session=session,
+        event_type=event_type,
+        auto_generated=auto_generated,
+    )
+    record = Attendance(
+        sync_key=str(uuid.uuid4()),
+        user_id=user_id,
+        timestamp=fields["timestamp"],
+        status=fields["status"],
+        session=fields["session"],
+        event_type=fields["event_type"],
+        auto_generated=fields["auto_generated"],
+        device_id=settings.DEVICE_ID,
+        synced=0,
+    )
+    db.add(record)
+    return safe_commit(db, f"Attendance record for user {user_id}")
+
+
+REPORT_EMAIL_COOLDOWN_MINUTES = 10
+
+
+def format_relative_time(dt_value: datetime | None) -> str | None:
+    if not dt_value:
+        return None
+
+    now = get_now()
+    if dt_value.tzinfo is None:
+        dt_value = dt_value.replace(tzinfo=now.tzinfo)
+
+    delta = now - dt_value
+    seconds = max(int(delta.total_seconds()), 0)
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        minutes = seconds // 60
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    if seconds < 86400:
+        hours = seconds // 3600
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    days = seconds // 86400
+    return f"{days} day{'s' if days != 1 else ''} ago"
+
+
+def get_report_email_state(user: User) -> dict[str, Any]:
+    now = get_now()
+    email_ready = bool(user.email and all([settings.MAIL_USERNAME, settings.MAIL_APP_PASSWORD]))
+    cooldown_remaining = 0
+
+    if user.last_report_sent:
+        last_sent = user.last_report_sent
+        if last_sent.tzinfo is None:
+            last_sent = last_sent.replace(tzinfo=now.tzinfo)
+        elapsed_seconds = (now - last_sent).total_seconds()
+        cooldown_remaining = max(0, REPORT_EMAIL_COOLDOWN_MINUTES * 60 - int(elapsed_seconds))
+
+    return {
+        "email_ready": email_ready,
+        "mail_configured": bool(all([settings.MAIL_USERNAME, settings.MAIL_APP_PASSWORD])),
+        "recipient": user.email,
+        "last_sent_at": user.last_report_sent,
+        "last_sent_label": format_relative_time(user.last_report_sent),
+        "cooldown_remaining": cooldown_remaining,
+        "can_send_now": email_ready and cooldown_remaining == 0,
+    }
+
+
+def build_staff_portal_context(db: Session, user: User | None = None, error: str | None = None) -> dict[str, Any]:
+    context: dict[str, Any] = {"user": user, "logs": [], "error": error}
+    if not user:
+        return context
+
+    logs = (
+        db.query(Attendance)
+        .filter(Attendance.user_id == user.id)
+        .order_by(Attendance.timestamp.desc())
+        .limit(30)
+        .all()
+    )
+    context["logs"] = logs
+
+    login_logs = [log for log in logs if infer_event_type(log.status, getattr(log, "event_type", None)) == "login"]
+    on_time_count = sum(1 for log in login_logs if log.status in {"Present", "On Time"})
+    late_count = sum(1 for log in login_logs if log.status in {"Late", "Tardy"})
+    absent_count = sum(1 for log in logs if log.status in ABSENT_STATUSES)
+    context["summary"] = {
+        "records_count": len(logs),
+        "on_time_count": on_time_count,
+        "late_count": late_count,
+        "absent_count": absent_count,
+        "latest_log": logs[0] if logs else None,
+    }
+    context["report_email"] = get_report_email_state(user)
+    context["report_month"] = get_now().month
+    context["report_year"] = get_now().year
+    return context
+
+
+def build_report_days_for_user(user: User, month: int, year: int, db: Session) -> tuple[datetime, list[dict[str, Any]]]:
+    start = datetime(year, month, 1)
+    last_day = monthrange(year, month)[1]
+    end = datetime(year, month, last_day, 23, 59, 59, 999999)
+
+    logs = (
+        db.query(Attendance)
+        .filter(
+            Attendance.user_id == user.id,
+            Attendance.timestamp >= start,
+            Attendance.timestamp <= end,
+        )
+        .order_by(Attendance.timestamp.asc())
+        .all()
+    )
+
+    by_day = {}
+    for log in logs:
+        if not log.timestamp:
+            continue
+        day = log.timestamp.day
+        by_day.setdefault(day, []).append(log)
+
+    in_statuses = {"On Time", "Late", "Present", "Tardy"}
+    days = []
+    for d in range(1, last_day + 1):
+        day_logs = by_day.get(d, [])
+        day_logs.sort(key=lambda l: l.timestamp)
+
+        am_in = am_out = pm_in = pm_out = None
+
+        for log in day_logs:
+            ts = log.timestamp
+            if not ts:
+                continue
+
+            session_name = normalize_session(getattr(log, "session", None), ts)
+            is_in = (log.status or "") in in_statuses
+            is_out = (log.status or "") == "Logout"
+            is_session_absent = (log.status or "") in {"AM Absent", "PM Absent"}
+            is_legacy_day_absent = (log.status or "") == "Absent" and getattr(log, "session", None) is None
+
+            if session_name == "AM":
+                if is_in and am_in is None:
+                    am_in = ts
+                elif is_out:
+                    am_out = ts
+                elif is_session_absent and am_in is None:
+                    am_in = "Absent"
+            elif session_name == "PM":
+                if is_in and pm_in is None:
+                    pm_in = ts
+                elif is_out:
+                    pm_out = ts
+                elif is_session_absent and pm_in is None:
+                    pm_in = "Absent"
+
+            if is_legacy_day_absent:
+                if am_in is None:
+                    am_in = "Absent"
+                if pm_in is None:
+                    pm_in = "Absent"
+
+        def fmt(value: Any) -> str | None:
+            if isinstance(value, datetime):
+                return value.strftime("%I:%M %p")
+            if isinstance(value, str):
+                return value
+            return None
+
+        days.append(
+            {
+                "day": d,
+                "am_in": fmt(am_in),
+                "am_out": fmt(am_out),
+                "pm_in": fmt(pm_in),
+                "pm_out": fmt(pm_out),
+                "ot_in": None,
+                "ot_out": None,
+            }
+        )
+
+    return start, days
+
+
+def queue_model_retrain(background_tasks: BackgroundTasks) -> bool:
+    if not face_engine:
+        return False
+    if not try_begin_model_mutation():
+        return False
+    background_tasks.add_task(train_and_reload_model_task)
+    return True
+
+
+def train_and_reload_model_task() -> None:
+    try:
+        if not face_engine:
+            return
+        with model_operation():
+            trained = face_engine.train_model()
+            if trained:
+                face_engine.reload_model()
+            else:
+                logging.warning("Model retraining completed without training samples.")
+    except Exception as exc:
+        logging.error("Background model retraining failed: %s", exc)
+    finally:
+        end_model_mutation()
+
+
+def queue_email_delivery(background_tasks: BackgroundTasks, to_email: str, subject: str, body: str) -> None:
+    background_tasks.add_task(send_email_task, to_email, subject, body)
+
+
+def send_email_task(to_email: str, subject: str, body: str) -> None:
+    if not send_email(to_email, subject, body):
+        logging.error("Background email delivery failed for %s", to_email)
 
 def get_now():
     """Returns the current time in the system's local timezone."""
@@ -406,7 +835,7 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
         return False
 
 # Flask-like template response helper
-def render_template(request: Request, name: str, context: dict = {}):
+def render_template(request: Request, name: str, context: dict | None = None):
     # Custom url_for to handle 'filename' for static files (Flask style)
     def url_for_wrapper(endpoint: str, **path_params):
         if endpoint == 'static' and 'filename' in path_params:
@@ -418,7 +847,7 @@ def render_template(request: Request, name: str, context: dict = {}):
         "url_for": url_for_wrapper,
         "get_flashed_messages": request.state.get_flashed_messages
     }
-    ctx.update(context)
+    ctx.update(context or {})
     return templates.TemplateResponse(name, ctx)
 
 # --- Core Application Routes ---
@@ -467,7 +896,7 @@ async def login_post(request: Request, password: str = Form(...)):
     - Sets session variables upon successful login.
     - Redirects to the admin dashboard.
     """
-    admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
+    admin_password = settings.ADMIN_PASSWORD
     if password == admin_password:
         request.session["logged_in"] = True
         request.session["role"] = "admin"
@@ -634,9 +1063,11 @@ async def update_user_post(request: Request, user_id: int,
     user.schedule_start = schedule_start
     user.schedule_end = schedule_end
     user.role = role
-    
-    db.commit()
-    
+
+    if not safe_commit(db, f"Update user {user_id}"):
+        request.state.flash("Could not update the user profile right now.", "danger")
+        return RedirectResponse(url=f"/edit_user/{user_id}", status_code=303)
+
     request.state.flash(f"User profile for {user.name} updated successfully.", "success")
     return RedirectResponse(url="/admin", status_code=303)
 
@@ -662,6 +1093,9 @@ async def export_attendance_csv(request: Request, db: Session = Depends(get_db))
                 "name",
                 "employment_type",
                 "timestamp",
+                "session",
+                "event_type",
+                "auto_generated",
                 "status",
             ]
         )
@@ -687,6 +1121,9 @@ async def export_attendance_csv(request: Request, db: Session = Depends(get_db))
                     user.name or "",
                     user.employment_type or "",
                     timestamp_str,
+                    attendance.session or "",
+                    attendance.event_type or "",
+                    int(attendance.auto_generated or 0),
                     attendance.status or "",
                 ]
             )
@@ -740,69 +1177,7 @@ async def generate_report(
 
     month = max(1, min(12, int(month)))
     year = int(year)
-
-    start = datetime(year, month, 1)
-    last_day = monthrange(year, month)[1]
-    end = datetime(year, month, last_day, 23, 59, 59, 999999)
-
-    logs = (
-        db.query(Attendance)
-        .filter(
-            Attendance.user_id == user.id,
-            Attendance.timestamp >= start,
-            Attendance.timestamp <= end,
-        )
-        .order_by(Attendance.timestamp.asc())
-        .all()
-    )
-
-    by_day = {}
-    for log in logs:
-        if not log.timestamp:
-            continue
-        day = log.timestamp.day
-        by_day.setdefault(day, []).append(log)
-
-    in_statuses = {"On Time", "Late", "Present", "Tardy"}
-    days = []
-    for d in range(1, last_day + 1):
-        day_logs = by_day.get(d, [])
-        day_logs.sort(key=lambda l: l.timestamp)
-
-        am_in = am_out = pm_in = pm_out = None
-
-        for log in day_logs:
-            ts = log.timestamp
-            if not ts:
-                continue
-
-            is_am = ts.hour < 12
-            is_in = (log.status or "") in in_statuses
-            is_out = (log.status or "") == "Logout"
-
-            if is_am:
-                if is_in and am_in is None:
-                    am_in = ts
-                elif is_out:
-                    am_out = ts
-            else:
-                if is_in and pm_in is None:
-                    pm_in = ts
-                elif is_out:
-                    pm_out = ts
-
-        fmt = lambda dt: dt.strftime("%I:%M %p") if dt else None
-        days.append(
-            {
-                "day": d,
-                "am_in": fmt(am_in),
-                "am_out": fmt(am_out),
-                "pm_in": fmt(pm_in),
-                "pm_out": fmt(pm_out),
-                "ot_in": None,
-                "ot_out": None,
-            }
-        )
+    start, days = build_report_days_for_user(user, month, year, db)
 
     month_name = start.strftime("%B")
     return render_template(
@@ -816,7 +1191,7 @@ async def generate_report(
 @app.get("/staff_portal", response_class=HTMLResponse)
 async def staff_portal_get(request: Request):
     """Serves the staff portal page where users can view their own attendance."""
-    return render_template(request, "staff_portal.html", {"user": None, "logs": []})
+    return render_template(request, "staff_portal.html", build_staff_portal_context(None, None))
 
 @app.post("/staff_portal", response_class=HTMLResponse)
 async def staff_portal_post(request: Request, 
@@ -827,10 +1202,28 @@ async def staff_portal_post(request: Request,
     """
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        return render_template(request, "staff_portal.html", {"user": None, "logs": [], "error": "Invalid User Selection"})
-    
-    logs = db.query(Attendance).filter(Attendance.user_id == user.id).order_by(Attendance.timestamp.desc()).limit(30).all()
-    return render_template(request, "staff_portal.html", {"user": user, "logs": logs})
+        return render_template(request, "staff_portal.html", build_staff_portal_context(db, None, "Invalid user selection."))
+
+    return render_template(request, "staff_portal.html", build_staff_portal_context(db, user))
+
+
+@app.get("/staff_report/{user_id}", response_class=HTMLResponse)
+async def staff_report(user_id: int, request: Request, month: int | None = None, year: int | None = None, db: Session = Depends(get_db)):
+    """Allows a staff user to view a printable monthly report from the staff portal."""
+    user = db.get(User, user_id)
+    if not user:
+        request.state.flash("User not found.", "danger")
+        return RedirectResponse(url="/staff_portal", status_code=303)
+
+    now = get_now()
+    report_month = max(1, min(12, int(month or now.month)))
+    report_year = int(year or now.year)
+    start, days = build_report_days_for_user(user, report_month, report_year, db)
+    return render_template(
+        request,
+        "report.html",
+        {"user": user, "month_name": start.strftime("%B"), "year": report_year, "days": days},
+    )
 
 @app.get("/re_enroll", response_class=HTMLResponse)
 async def re_enroll_get(request: Request, db: Session = Depends(get_db)):
@@ -889,7 +1282,7 @@ async def analytics_endpoint(db: Session = Depends(get_db)):
             
             absent_count = db.query(Attendance).filter(
                 Attendance.user_id == user.id,
-                Attendance.status == "Absent",
+                Attendance.status.in_(list(ABSENT_STATUSES)),
                 Attendance.timestamp >= start_dt
             ).count()
             
@@ -937,11 +1330,33 @@ async def add_user(request: Request, name: str = Form(...), email: str = Form(..
         request.state.flash("This Gmail address is already registered.", "danger")
         return RedirectResponse(url="/admin", status_code=303)
 
-    staff_code = f"{random.randint(0, 999999):06d}" # Simple unique code generation
-    new_user = User(name=name, email=email, employment_type=employment_type, staff_code=staff_code)
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    new_user = None
+    for _ in range(5):
+        try:
+            staff_code = generate_staff_code(db)
+            new_user = User(
+                name=name.strip(),
+                email=email.strip(),
+                employment_type=employment_type,
+                staff_code=staff_code,
+            )
+            db.add(new_user)
+            db.commit()
+            db.refresh(new_user)
+            break
+        except IntegrityError:
+            db.rollback()
+            logging.warning("Staff code collision detected while creating %s. Retrying.", email)
+            new_user = None
+        except SQLAlchemyError as exc:
+            db.rollback()
+            logging.error("Failed to create user %s: %s", email, exc)
+            request.state.flash("Could not create the user right now.", "danger")
+            return RedirectResponse(url="/admin", status_code=303)
+
+    if not new_user:
+        request.state.flash("Could not generate a unique staff code. Please try again.", "danger")
+        return RedirectResponse(url="/admin", status_code=303)
 
     user_dir = os.path.join(basedir, 'data', 'faces', str(new_user.id))
     os.makedirs(user_dir, exist_ok=True)
@@ -958,7 +1373,12 @@ async def enroll_page(request: Request, user_id: int, db: Session = Depends(get_
     if not user:
         request.state.flash("User not found!", "danger")
         return RedirectResponse(url="/admin", status_code=303)
-    return render_template(request, "enroll.html", {"user": user, "re_enroll": re_enroll})
+    return render_template(request, "enroll.html", {
+        "user": user,
+        "re_enroll": re_enroll,
+        "capture_target": ENROLLMENT_CAPTURE_TARGET,
+        "pose_bucket_target": ENROLLMENT_BUCKET_TARGET,
+    })
 
 @app.post("/api/capture/{user_id}")
 async def api_capture(user_id: int, request: Request, db: Session = Depends(get_db)):
@@ -976,9 +1396,15 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
     if not os.path.exists(user_dir):
         return JSONResponse({'status': 'error', 'message': 'User directory not found'}, status_code=404)
 
-    existing = len([name for name in os.listdir(user_dir) if name.endswith('.jpg')])
-    if existing >= 25:
-        return JSONResponse({'status': 'complete', 'count': existing})
+    existing = get_enrollment_total_count(user_dir)
+    pose_counts = get_enrollment_pose_counts(user_dir)
+    if existing >= ENROLLMENT_CAPTURE_TARGET:
+        return JSONResponse({
+            'status': 'complete',
+            'count': existing,
+            'target': ENROLLMENT_CAPTURE_TARGET,
+            'guidance': "Enrollment set complete.",
+        })
 
     data = await request.json()
     image_data = data.get('image')
@@ -998,8 +1424,12 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
     if frame is None:
         return JSONResponse({'status': 'error', 'message': 'Camera/Image error'}, status_code=500)
 
-    # Use consolidated FaceEngine.detect_faces (ignores rate limiting for enrollment)
-    face_results = face_engine.detect_faces(frame)
+    try:
+        with model_operation(timeout=0.25, message="Face model is being updated. Please wait a moment."):
+            face_results = face_engine.detect_faces(frame)
+    except ModelBusyError as exc:
+        return JSONResponse({'status': 'busy', 'message': str(exc)}, status_code=503)
+
     if face_results:
         # Sort by bbox size to get the most prominent face
         face_results = sorted(face_results, key=lambda f: f.bbox[2] * f.bbox[3], reverse=True)
@@ -1013,21 +1443,71 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
         face_img = frame[y1:y2, x1:x2]
         
         if face_img.size == 0:
-            return JSONResponse({'status': 'no_face', 'count': existing})
+            return JSONResponse({
+                'status': 'retry',
+                'count': existing,
+                'target': ENROLLMENT_CAPTURE_TARGET,
+                'message': "Face crop was empty. Please re-center your face.",
+                'guidance': pose_instruction(suggest_next_pose(pose_counts)),
+            })
 
-        gray_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-        filename = f"{existing + 1}.jpg"
-        cv2.imwrite(os.path.join(user_dir, filename), gray_face)
-        return JSONResponse({'status': 'success', 'count': existing + 1})
+        quality = face_engine.assess_capture_quality(face_img, res.landmarks_2d)
+        pose_bucket = quality.get("pose_bucket", "center")
+
+        if not quality.get("ok"):
+            return JSONResponse({
+                'status': 'retry',
+                'count': existing,
+                'target': ENROLLMENT_CAPTURE_TARGET,
+                'message': quality.get("reason", "Capture quality too low."),
+                'guidance': pose_instruction(suggest_next_pose(pose_counts)),
+                'pose_bucket': pose_bucket,
+            })
+
+        if pose_counts.get(pose_bucket, 0) >= ENROLLMENT_BUCKET_TARGET:
+            return JSONResponse({
+                'status': 'retry',
+                'count': existing,
+                'target': ENROLLMENT_CAPTURE_TARGET,
+                'message': f"We have enough {pose_bucket} images. {pose_instruction(suggest_next_pose(pose_counts))}",
+                'guidance': pose_instruction(suggest_next_pose(pose_counts)),
+                'pose_bucket': pose_bucket,
+            })
+
+        if is_capture_too_similar(user_dir, pose_bucket, face_img):
+            return JSONResponse({
+                'status': 'retry',
+                'count': existing,
+                'target': ENROLLMENT_CAPTURE_TARGET,
+                'message': "That frame is too similar to the previous one. Change your head angle slightly.",
+                'guidance': pose_instruction(suggest_next_pose(pose_counts)),
+                'pose_bucket': pose_bucket,
+            })
+
+        processed_face = face_engine.preprocess_face(face_img)
+        filename = f"{pose_bucket}_{existing + 1:03d}.jpg"
+        cv2.imwrite(os.path.join(user_dir, filename), processed_face)
+
+        updated_count = existing + 1
+        updated_pose_counts = get_enrollment_pose_counts(user_dir)
+        next_pose = suggest_next_pose(updated_pose_counts)
+        return JSONResponse({
+            'status': 'success',
+            'count': updated_count,
+            'target': ENROLLMENT_CAPTURE_TARGET,
+            'message': f"Captured {pose_bucket} pose successfully.",
+            'guidance': pose_instruction(next_pose),
+            'pose_bucket': pose_bucket,
+            'pose_counts': updated_pose_counts,
+        })
     
-    return JSONResponse({'status': 'no_face', 'count': existing})
-
-from cachetools import TTLCache
-import time
-
-# Rate limiting for recognition requests (per IP)
-# Increased to 20 requests per 2 seconds (10 FPS max) to avoid client-side chaos
-recognition_rate_limit = TTLCache(maxsize=1000, ttl=2.0)
+    return JSONResponse({
+        'status': 'no_face',
+        'count': existing,
+        'target': ENROLLMENT_CAPTURE_TARGET,
+        'message': 'No face detected. Please look directly at the camera.',
+        'guidance': pose_instruction(suggest_next_pose(pose_counts)),
+    })
 
 @app.post("/api/recognize")
 async def api_recognize(request: Request, db: Session = Depends(get_db)):
@@ -1044,10 +1524,9 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
     
     # Rate limiting check
     client_ip = request.client.host
-    current_count = recognition_rate_limit.get(client_ip, 0)
-    if current_count >= 20: # Relaxed limit
+    current_count = recognition_rate_limit.increment(client_ip, delta=1, ttl=2.0, initial=0)
+    if current_count > 20:
         return JSONResponse({'status': 'error', 'message': 'Too many requests'}, status_code=429)
-    recognition_rate_limit[client_ip] = current_count + 1
 
     # If camera is not active, don't process recognition
     if not camera_active:
@@ -1073,88 +1552,85 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
     if frame is None:
         return JSONResponse({'status': 'error', 'message': 'Empty frame'}, status_code=400)
 
-    # Use consolidated FaceEngine.process_frame
-    face_results = face_engine.process_frame(frame)
     now_ts = time.time()
     results = []
 
-    if recognized_faces:
-        stale_keys = []
-        for k, v in recognized_faces.items():
-            ts = v.get("ts") if isinstance(v, dict) else None
-            if ts is None or (now_ts - float(ts)) > RECOGNITION_STREAK_TIMEOUT_SEC:
-                stale_keys.append(k)
-        for k in stale_keys:
-            recognized_faces.pop(k, None)
-    
-    for res in face_results:
-        x, y, w, h = res.bbox
-        # Add padding to face crop for better recognition
-        pad = int(w * 0.1)
-        y1, y2 = max(0, y-pad), min(frame.shape[0], y+h+pad)
-        x1, x2 = max(0, x-pad), min(frame.shape[1], x+w+pad)
-        face_img = frame[y1:y2, x1:x2]
-        
-        label, distance = face_engine.recognize_face(face_img)
+    try:
+        with model_operation(timeout=0.25, message="Face model is being updated. Please wait a moment."):
+            face_results = face_engine.process_frame(frame)
 
-        result = {
-            'rect': [int(x), int(y), int(w), int(h)],
-            'name': 'Unknown',
-            'status': 'unknown',
-            'verified': False,
-            'user_id': None,
-            'blink_detected': res.blink_detected
-        }
-        
-        # Debug logging for blink detection
-        logging.debug(f"Face detection - blink_detected: {res.blink_detected}, bbox: {res.bbox}")
+            for res in face_results:
+                x, y, w, h = res.bbox
+                pad = int(w * 0.1)
+                y1, y2 = max(0, y-pad), min(frame.shape[0], y+h+pad)
+                x1, x2 = max(0, x-pad), min(frame.shape[1], x+w+pad)
+                face_img = frame[y1:y2, x1:x2]
 
-        face_ok = (w >= MIN_FACE_SIZE_PX and h >= MIN_FACE_SIZE_PX)
-        candidate = (label != -1 and face_ok and distance < LBPH_DISTANCE_THRESHOLD)
+                label, distance = face_engine.recognize_face(face_img)
 
-        cx = x + (w / 2.0)
-        cy = y + (h / 2.0)
-        track_key = (int(cx // 80), int(cy // 80))
+                result = {
+                    'rect': [int(x), int(y), int(w), int(h)],
+                    'name': 'Unknown',
+                    'status': 'unknown',
+                    'verified': False,
+                    'user_id': None,
+                    'blink_detected': res.blink_detected
+                }
 
-        stable = False
-        if candidate:
-            prev = recognized_faces.get(track_key)
-            if isinstance(prev, dict) and prev.get("label") == label and (now_ts - float(prev.get("ts", 0))) <= RECOGNITION_STREAK_TIMEOUT_SEC:
-                streak = int(prev.get("streak", 0)) + 1
-            else:
-                streak = 1
-            recognized_faces[track_key] = {"label": label, "streak": streak, "ts": now_ts, "distance": float(distance)}
-            stable = streak >= RECOGNITION_STREAK_REQUIRED
-        else:
-            recognized_faces.pop(track_key, None)
+                logging.debug(f"Face detection - blink_detected: {res.blink_detected}, bbox: {res.bbox}")
 
-        if candidate and not stable:
-            result["status"] = "recognized"
-            result["name"] = "PLEASE HOLD STILL"
+                face_ok = (w >= MIN_FACE_SIZE_PX and h >= MIN_FACE_SIZE_PX)
+                candidate = (label != -1 and face_ok and distance < LBPH_DISTANCE_THRESHOLD)
 
-        if candidate and stable:
-            user = db.get(User, label)
-            if user:
-                result['name'] = user.name
-                result['status'] = 'recognized'
-                result['user_id'] = user.id
-                result['confidence'] = distance
+                cx = x + (w / 2.0)
+                cy = y + (h / 2.0)
+                track_key = (int(cx // 80), int(cy // 80))
 
-                is_currently_verified = face_verification_cache.get(user.id, 0) > (now_ts - VERIFIED_TTL_SEC)
-
-                if res.blink_detected:
-                    face_verification_cache[user.id] = now_ts
-                    result["verified"] = True
-                elif is_currently_verified:
-                    result["verified"] = True
+                stable = False
+                if candidate:
+                    prev = recognized_faces.get(track_key)
+                    if isinstance(prev, dict) and prev.get("label") == label:
+                        streak = int(prev.get("streak", 0)) + 1
+                    else:
+                        streak = 1
+                    recognized_faces.set(
+                        track_key,
+                        {"label": label, "streak": streak, "ts": now_ts, "distance": float(distance)},
+                        ttl=RECOGNITION_STREAK_TIMEOUT_SEC,
+                    )
+                    stable = streak >= RECOGNITION_STREAK_REQUIRED
                 else:
-                    result["verified"] = False
-        
-        results.append(result)
+                    recognized_faces.remove(track_key)
+
+                if candidate and not stable:
+                    result["status"] = "recognized"
+                    result["name"] = "PLEASE HOLD STILL"
+
+                if candidate and stable:
+                    user = db.get(User, label)
+                    if user:
+                        result['name'] = user.name
+                        result['status'] = 'recognized'
+                        result['user_id'] = user.id
+                        result['confidence'] = distance
+
+                        is_currently_verified = face_verification_cache.get(user.id, 0) > (now_ts - VERIFIED_TTL_SEC)
+
+                        if res.blink_detected:
+                            face_verification_cache.set(user.id, now_ts, ttl=VERIFIED_TTL_SEC)
+                            result["verified"] = True
+                        elif is_currently_verified:
+                            result["verified"] = True
+                        else:
+                            result["verified"] = False
+
+                results.append(result)
+    except ModelBusyError as exc:
+        return JSONResponse({'status': 'busy', 'message': str(exc), 'faces': []}, status_code=503)
 
     # Update live status via Redis
     if redis:
-        verified_users = {uid: ts for uid, ts in face_verification_cache.items() if ts > (now_ts - VERIFIED_TTL_SEC)}
+        verified_users = face_verification_cache.snapshot()
         try:
             redis.set("live_status:verified_users", json.dumps(verified_users))
         except Exception as e:
@@ -1174,7 +1650,7 @@ async def set_camera_state(request: Request):
     return JSONResponse({"status": "success", "active": camera_active})
 
 @app.post("/api/attendance/record")
-async def api_attendance_record(request: Request, db: Session = Depends(get_db), redis: Any = Depends(get_redis)):
+async def api_attendance_record(request: Request, db: Session = Depends(get_db)):
     """
     Records an attendance log for a user (login/logout).
     - Requires a verified liveness check.
@@ -1204,79 +1680,139 @@ async def api_attendance_record(request: Request, db: Session = Depends(get_db),
         if now_ts - last_verified > VERIFIED_TTL_SEC:
             return JSONResponse({'status': 'error', 'message': 'Liveness verification required. Please look at the camera.'}, status_code=403)
 
-        # --- Cooldown Check ---
-        # Prevents rapid, duplicate login/logout actions from the same user.
-        last_action_time = attendance_cache.get(uid, 0)
-        if now_ts - last_action_time < 60: # 60-second cooldown
-            return JSONResponse({'status': 'error', 'message': 'Please wait a moment before your next action.'}, status_code=429)
+        # --- Short same-action dedupe check ---
+        # Prevents duplicate submits from double clicks or repeated frontend requests
+        # without blocking legitimate follow-up actions like immediate logout after login.
+        action_normalized = action.lower()
+        last_action_entry = attendance_cache.get(uid)
+        if isinstance(last_action_entry, dict):
+            previous_action = str(last_action_entry.get("action", "")).lower()
+            previous_ts = float(last_action_entry.get("ts", 0))
+            if previous_action == action_normalized and (now_ts - previous_ts) < ATTENDANCE_DEDUP_WINDOW_SEC:
+                return JSONResponse({'status': 'error', 'message': 'This action was just recorded. Please wait a few seconds and try again.'}, status_code=429)
 
         now = get_now()
         today_str = now.strftime("%Y-%m-%d")
         live_set_key = f"attendance:{today_str}:present"
-        
-        if action.lower() == 'login':
-            if redis.sismember(live_set_key, uid):
+        attendance_fields = build_attendance_fields(
+            "Logout" if action_normalized == "logout" else "Pending",
+            timestamp=now,
+            event_type=action_normalized,
+        )
+        redis_client = redis
+        redis_available = redis_client is not None
+
+        if action_normalized == 'login':
+            already_logged_in = False
+            if redis_available:
+                try:
+                    already_logged_in = bool(redis_client.sismember(live_set_key, uid))
+                except Exception as exc:
+                    logging.warning("Redis login presence check failed for user %s: %s", uid, exc)
+                    redis_available = False
+            if not redis_available:
+                already_logged_in = is_present_status(latest_user_status_for_day(db, uid, now.date()))
+
+            if already_logged_in:
                 return JSONResponse({'status': 'error', 'message': 'Already logged in.'}, status_code=409)
-            
-            redis.sadd(live_set_key, uid)
-            
+
             sch_start_str = user.schedule_start or "06:00"
             try:
                 sch_start_dt = now.replace(hour=int(sch_start_str[:2]), minute=int(sch_start_str[3:]), second=0, microsecond=0)
-            except:
+            except (TypeError, ValueError, IndexError):
                 sch_start_dt = now.replace(hour=6, minute=0)
 
             status = 'On Time' if now <= sch_start_dt + timedelta(minutes=15) else 'Late'
-            
-            # Record via SyncEngine (Producer)
+            attendance_fields["status"] = status
+
             if sync_engine:
-                sync_engine.record_attendance(user_id=uid, status=status)
-            else:
-                # Fallback to direct DB recording if sync_engine is disabled
-                record = Attendance(
-                    sync_key=str(uuid.uuid4()),
-                    user_id=uid,
-                    status=status,
-                    device_id=settings.DEVICE_ID,
-                    synced=0
-                )
-                db.add(record)
-                db.commit()
-            
+                try:
+                    sync_engine.record_attendance(
+                        user_id=uid,
+                        status=status,
+                        timestamp=attendance_fields["timestamp"],
+                        session=attendance_fields["session"],
+                        event_type=attendance_fields["event_type"],
+                    )
+                except Exception as exc:
+                    logging.error("SyncEngine record failed for user %s: %s", uid, exc)
+                    return JSONResponse({'status': 'error', 'message': 'Could not record attendance right now.'}, status_code=500)
+            elif not record_attendance_direct(
+                db,
+                uid,
+                status,
+                timestamp=attendance_fields["timestamp"],
+                session=attendance_fields["session"],
+                event_type=attendance_fields["event_type"],
+            ):
+                return JSONResponse({'status': 'error', 'message': 'Could not record attendance right now.'}, status_code=500)
+
+            if redis_available:
+                try:
+                    redis_client.sadd(live_set_key, uid)
+                except Exception as exc:
+                    logging.warning("Redis login presence update failed for user %s: %s", uid, exc)
+
             message = f"Login successful for {user.name}."
 
-        elif action.lower() == 'logout':
-            redis.srem(live_set_key, uid)
+        elif action_normalized == 'logout':
             if sync_engine:
-                sync_engine.record_attendance(user_id=uid, status='Logout')
-            else:
-                # Fallback to direct DB recording if sync_engine is disabled
-                record = Attendance(
-                    sync_key=str(uuid.uuid4()),
-                    user_id=uid,
-                    status='Logout',
-                    device_id=settings.DEVICE_ID,
-                    synced=0
-                )
-                db.add(record)
-                db.commit()
-            
+                try:
+                    sync_engine.record_attendance(
+                        user_id=uid,
+                        status='Logout',
+                        timestamp=attendance_fields["timestamp"],
+                        session=attendance_fields["session"],
+                        event_type=attendance_fields["event_type"],
+                    )
+                except Exception as exc:
+                    logging.error("SyncEngine logout record failed for user %s: %s", uid, exc)
+                    return JSONResponse({'status': 'error', 'message': 'Could not record attendance right now.'}, status_code=500)
+            elif not record_attendance_direct(
+                db,
+                uid,
+                'Logout',
+                timestamp=attendance_fields["timestamp"],
+                session=attendance_fields["session"],
+                event_type=attendance_fields["event_type"],
+            ):
+                return JSONResponse({'status': 'error', 'message': 'Could not record attendance right now.'}, status_code=500)
+
+            if redis_available:
+                try:
+                    redis_client.srem(live_set_key, uid)
+                except Exception as exc:
+                    logging.warning("Redis logout presence update failed for user %s: %s", uid, exc)
+
             message = f"Logout successful for {user.name}."
         
         else:
             return JSONResponse({'status': 'error', 'message': 'Invalid action'}, status_code=400)
 
         # Update the cooldown timer
-        attendance_cache[uid] = now_ts
+        attendance_cache.set(uid, {"action": action_normalized, "ts": now_ts}, ttl=max(ATTENDANCE_DEDUP_WINDOW_SEC * 2, 10.0))
 
         return JSONResponse({'status': 'success', 'message': message})
 
     except Exception as e:
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': str(e)}, status_code=500)
+        logging.error("Attendance record error: %s", e)
+        logging.error(traceback.format_exc())
+        return JSONResponse({'status': 'error', 'message': 'Unexpected attendance error.'}, status_code=500)
+
+@app.get("/api/live-status")
+async def api_live_status(db: Session = Depends(get_db)):
+    """Returns the current number of present users for the admin dashboard."""
+    try:
+        return JSONResponse({
+            "status": "success",
+            "present_count": get_live_present_count(db),
+        })
+    except Exception as exc:
+        logging.error("Live status error: %s", exc)
+        return JSONResponse({"status": "error", "message": "Could not load live status."}, status_code=500)
 
 @app.post("/delete_user/{user_id}")
-async def delete_user(user_id: int, request: Request, db: Session = Depends(get_db)):
+async def delete_user(user_id: int, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
     Deletes a user and all their associated data.
     - Requires admin login.
@@ -1285,24 +1821,46 @@ async def delete_user(user_id: int, request: Request, db: Session = Depends(get_
     """
     if not request.session.get("logged_in"):
         return RedirectResponse(url="/login")
-    
+
+    mutation_started = try_begin_model_mutation()
+    if face_engine and not mutation_started:
+        request.state.flash("Face model is busy updating. Please try deleting the user again in a moment.", "warning")
+        return RedirectResponse(url="/admin", status_code=303)
+
     user = db.get(User, user_id)
     if user:
         db.query(Attendance).filter(Attendance.user_id == user.id).delete()
         db.delete(user)
-        db.commit()
-        
-        import shutil
+        if not safe_commit(db, f"Delete user {user_id}"):
+            if face_engine:
+                end_model_mutation()
+            request.state.flash("Could not delete the user right now.", "danger")
+            return RedirectResponse(url="/admin", status_code=303)
+
         user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
-        if os.path.exists(user_dir):
-            shutil.rmtree(user_dir)
-            
+        try:
+            with model_operation(timeout=0.25, message="Face model is being updated. Please try again shortly."):
+                if os.path.exists(user_dir):
+                    shutil.rmtree(user_dir)
+        except ModelBusyError:
+            if face_engine:
+                end_model_mutation()
+            request.state.flash("Face model is busy updating. Please try deleting the user again in a moment.", "warning")
+            return RedirectResponse(url="/admin", status_code=303)
+        except OSError as exc:
+            if face_engine:
+                end_model_mutation()
+            logging.error("Failed to remove face directory for user %s: %s", user_id, exc)
+            request.state.flash("User data was removed, but face files could not be cleaned up.", "warning")
+            return RedirectResponse(url="/admin", status_code=303)
+
         if face_engine:
-            face_engine.train_model()
-            face_engine.reload_model()
-            
+            background_tasks.add_task(train_and_reload_model_task)
+
         request.state.flash(f"User {user.name} has been deleted.", "success")
     else:
+        if face_engine:
+            end_model_mutation()
         request.state.flash("User not found.", "danger")
         
     return RedirectResponse(url="/admin", status_code=303)
@@ -1318,8 +1876,10 @@ async def retrain_model(request: Request, background_tasks: BackgroundTasks):
         return RedirectResponse(url="/login")
         
     if face_engine:
-        request.state.flash("Model retraining has been initiated. This may take a few minutes.", "info")
-        background_tasks.add_task(face_engine.train_model)
+        if queue_model_retrain(background_tasks):
+            request.state.flash("Model retraining has been initiated. This may take a few minutes.", "info")
+        else:
+            request.state.flash("Face model is already updating. Please wait for the current run to finish.", "warning")
     else:
         request.state.flash("Face engine not available.", "danger")
         
@@ -1329,8 +1889,9 @@ async def retrain_model(request: Request, background_tasks: BackgroundTasks):
 async def api_train_model(background_tasks: BackgroundTasks):
     """API endpoint to trigger model retraining as a background task."""
     if face_engine:
-        background_tasks.add_task(face_engine.train_model)
-        return JSONResponse({'status': 'success', 'message': 'Model training initiated.'})
+        if queue_model_retrain(background_tasks):
+            return JSONResponse({'status': 'success', 'message': 'Model training initiated.'})
+        return JSONResponse({'status': 'busy', 'message': 'Face model is already updating.'}, status_code=409)
     else:
         return JSONResponse({'status': 'error', 'message': 'Face engine not available.'}, status_code=500)
 
@@ -1349,11 +1910,11 @@ async def advanced_analytics_data(
     """
     # Create a cache key based on the query parameters
     cache_key = f"{start_date}-{end_date}-{employment_type}-{user_id}"
-    
-    # Check if the data is in the cache
-    if cache_key in analytics_cache:
+
+    cached_result = analytics_cache.get(cache_key)
+    if cached_result is not None:
         logging.info(f"Serving analytics data from cache for key: {cache_key}")
-        return JSONResponse(analytics_cache[cache_key])
+        return JSONResponse(cached_result)
 
     logging.info(f"Cache miss. Generating new analytics data for key: {cache_key}")
     analytics = AnalyticsEngine(db)
@@ -1380,11 +1941,12 @@ async def advanced_analytics_data(
             peak["data"][h] = int(count)
     
     # Risks users - with separate caching
-    if "risks" in risk_cache:
-        risks = risk_cache["risks"]
+    cached_risks = risk_cache.get("risks")
+    if cached_risks is not None:
+        risks = cached_risks
     else:
         risks = analytics.predict_risk_users()
-        risk_cache["risks"] = risks
+        risk_cache.set("risks", risks)
     
     # Store the result in the cache
     result = {
@@ -1400,12 +1962,19 @@ async def advanced_analytics_data(
     insights = analytics.get_advanced_insights(start, end, employment_type, user_id)
     result["insights"] = insights
     
-    analytics_cache[cache_key] = result
+    analytics_cache.set(cache_key, result)
     
     return JSONResponse(result)
 
 @app.post("/request_early_report")
-async def request_early_report(request: Request, user_id: int = Form(...), db: Session = Depends(get_db)):
+async def request_early_report(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    user_id: int = Form(...),
+    month: int = Form(...),
+    year: int = Form(...),
+    db: Session = Depends(get_db),
+):
     """Handles the request for an early attendance report from the staff portal."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -1416,21 +1985,39 @@ async def request_early_report(request: Request, user_id: int = Form(...), db: S
         request.state.flash("No email address on file for this user.", "danger")
         return RedirectResponse(url="/staff_portal", status_code=303)
 
+    report_email = get_report_email_state(user)
+    if not report_email["mail_configured"]:
+        request.state.flash("Email sending is not configured on this device yet.", "danger")
+        return RedirectResponse(url="/staff_portal", status_code=303)
+
+    if report_email["cooldown_remaining"] > 0:
+        wait_minutes = max(1, math.ceil(report_email["cooldown_remaining"] / 60))
+        request.state.flash(
+            f"A report was just requested for {user.name}. Please wait about {wait_minutes} minute{'s' if wait_minutes != 1 else ''} before sending another one.",
+            "warning",
+        )
+        return RedirectResponse(url="/staff_portal", status_code=303)
+
     # --- Report Analytics ---
     # Calculate summary statistics for the user's recent activity.
     now = get_now()
-    start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    report_month = max(1, min(12, int(month)))
+    report_year = int(year)
+    start_of_month = now.replace(year=report_year, month=report_month, day=1, hour=0, minute=0, second=0, microsecond=0)
+    month_last_day = monthrange(report_year, report_month)[1]
+    end_of_month = now.replace(year=report_year, month=report_month, day=month_last_day, hour=23, minute=59, second=59, microsecond=999999)
     
     logs = db.query(Attendance).filter(
         Attendance.user_id == user.id,
-        Attendance.timestamp >= start_of_month
+        Attendance.timestamp >= start_of_month,
+        Attendance.timestamp <= end_of_month
     ).order_by(Attendance.timestamp.desc()).all()
 
     analytics_engine = AnalyticsEngine(db)
     
     # Comprehensive analytics for the user
-    end_date = now.date()
-    start_date = end_date - timedelta(days=30)
+    end_date = end_of_month.date()
+    start_date = start_of_month.date()
     
     # Arrival patterns
     peak_times = analytics_engine.get_peak_arrival_times(start_date, end_date, user_id=user.id)
@@ -1442,6 +2029,7 @@ async def request_early_report(request: Request, user_id: int = Form(...), db: S
     
     on_time_arrivals = sum(1 for log in logs if log.status in ["On Time", "Present"])
     late_arrivals = sum(1 for log in logs if log.status in ["Late", "Tardy"])
+    absent_sessions = sum(1 for log in logs if log.status in ABSENT_STATUSES)
     total_arrivals = on_time_arrivals + late_arrivals
     punctuality_score = (on_time_arrivals / total_arrivals * 100) if total_arrivals > 0 else 100
 
@@ -1461,11 +2049,12 @@ async def request_early_report(request: Request, user_id: int = Form(...), db: S
     body = template.render({
         "user": user,
         "logs": logs[:15], # Show the 15 most recent logs in the table
-        "report_date": now.strftime('%B %d, %Y'),
+        "report_date": start_of_month.strftime('%B %Y'),
         "current_year": now.year,
         "analytics": {
             "on_time": on_time_arrivals,
             "late": late_arrivals,
+            "absent": absent_sessions,
             "punctuality_score": f"{punctuality_score:.1f}",
             "motivation": motivation,
             "motivation_color": motivation_color,
@@ -1475,27 +2064,40 @@ async def request_early_report(request: Request, user_id: int = Form(...), db: S
         }
     })
 
-    subject = f"Your Attendance Report for {get_now().strftime('%B %Y')}"
+    subject = f"Your Attendance Report for {start_of_month.strftime('%B %Y')}"
 
-    email_sent = send_email(user.email, subject, body)
+    queue_email_delivery(background_tasks, user.email, subject, body)
+    user.last_report_sent = now
+    if not safe_commit(db, f"Update last report sent for user {user.id}"):
+        request.state.flash("The report was queued, but the send status could not be saved.", "warning")
+        return RedirectResponse(url="/staff_portal", status_code=303)
 
-    if email_sent:
-        request.state.flash(f"Early report request for {user.name} has been sent to {user.email}.", "success")
-    else:
-        request.state.flash("Could not send email. Please check system configuration.", "danger")
+    request.state.flash(
+        f"Attendance report for {user.name} was queued for delivery to {user.email}. Please allow a few minutes for arrival.",
+        "success",
+    )
 
     return RedirectResponse(url="/staff_portal", status_code=303)
 
 @app.post("/api/reset_faces/{user_id}")
 async def reset_faces(user_id: int, db: Session = Depends(get_db)):
     """Deletes all face data for a user, allowing for re-enrollment."""
+    if face_engine and not try_begin_model_mutation():
+        return JSONResponse({'status': 'busy', 'message': 'Face model is already updating.'}, status_code=409)
+
     user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
-    if os.path.exists(user_dir):
-        import shutil
-        shutil.rmtree(user_dir)
-        os.makedirs(user_dir, exist_ok=True)
-        return JSONResponse({'status': 'success', 'message': f'Faces reset for user {user_id}'})
-    return JSONResponse({'status': 'error', 'message': 'User directory not found'}, status_code=404)
+    try:
+        with model_operation(timeout=0.25, message="Face model is being updated. Please try again shortly."):
+            if os.path.exists(user_dir):
+                shutil.rmtree(user_dir)
+                os.makedirs(user_dir, exist_ok=True)
+                return JSONResponse({'status': 'success', 'message': f'Faces reset for user {user_id}'})
+            return JSONResponse({'status': 'error', 'message': 'User directory not found'}, status_code=404)
+    except ModelBusyError as exc:
+        return JSONResponse({'status': 'busy', 'message': str(exc)}, status_code=503)
+    finally:
+        if face_engine:
+            end_model_mutation()
 
 @app.get("/api/recent_logs")
 async def api_recent_logs(db: Session = Depends(get_db)):
@@ -1517,8 +2119,9 @@ async def api_recent_logs(db: Session = Depends(get_db)):
             
         return JSONResponse(results)
     except Exception as e:
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        logging.error("Recent logs error: %s", e)
+        logging.error(traceback.format_exc())
+        return JSONResponse({"status": "error", "message": "Could not load recent logs."}, status_code=500)
 
 @app.post("/api/chat")
 async def api_chat(request: Request):

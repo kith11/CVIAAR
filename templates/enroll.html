@@ -2,7 +2,7 @@
 {% block content %}
 <div class="text-center">
     <h2>Enrolling: {{ user.name }}</h2>
-    <p class="text-muted">Please look at the camera. We need to capture 25 face images.</p>
+    <p class="text-muted">Please look at the camera. We need to capture {{ capture_target }} quality face images with varied head angles for better accuracy.</p>
     
     <div class="position-relative d-inline-block">
         <video id="video" autoplay playsinline class="img-fluid border rounded" style="max-width: 640px; width: 100%; transform: scaleX(-1);"></video>
@@ -13,21 +13,24 @@
     </div>
 
     <div class="mt-4" style="max-width: 640px; margin: 20px auto;">
-        <h5>Progress: <span id="count">0</span>/25</h5>
+        <h5>Progress: <span id="count">0</span>/{{ capture_target }}</h5>
         <div class="progress">
             <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
         </div>
         <div id="message" class="mt-2 text-info">Initializing Camera...</div>
+        <div id="guidance" class="mt-2 text-muted small">Start by looking straight at the camera, then follow the angle prompts.</div>
     </div>
 </div>
 
 <script>
     const userId = "{{ user.id }}";
     const isReEnroll = {{ re_enroll|tojson }};
+    const captureTarget = {{ capture_target|tojson }};
     
     const progressBar = document.getElementById('progress-bar');
     const countSpan = document.getElementById('count');
     const messageDiv = document.getElementById('message');
+    const guidanceDiv = document.getElementById('guidance');
     const statusOverlay = document.getElementById('status-overlay');
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
@@ -102,7 +105,7 @@
     }
 
     function captureFace() {
-        if (captured >= 25 || isTraining) return;
+        if (captured >= captureTarget || isTraining) return;
 
         if (video.readyState === video.HAVE_ENOUGH_DATA) {
             canvas.width = video.videoWidth;
@@ -117,19 +120,28 @@
             })
             .then(response => response.json())
             .then(data => {
+                const target = data.target || captureTarget;
+                if (data.guidance) {
+                    guidanceDiv.textContent = data.guidance;
+                }
+
                 if (data.status === 'success' || data.status === 'complete') {
                     captured = data.count;
-                    updateProgress();
+                    updateProgress(target);
                     
-                    if (captured >= 25) {
+                    if (captured >= target) {
                         startTraining();
                     } else {
-                        messageDiv.textContent = "Face captured! stay still...";
+                        messageDiv.textContent = data.message || "Face captured. Change your angle slightly for the next one.";
                         messageDiv.className = "mt-2 text-success";
-                        setTimeout(captureFace, 500); // Wait a bit before next capture
+                        setTimeout(captureFace, 650);
                     }
+                } else if (data.status === 'retry') {
+                    messageDiv.textContent = data.message || "Adjust your angle slightly and try again.";
+                    messageDiv.className = "mt-2 text-warning";
+                    setTimeout(captureFace, 700);
                 } else if (data.status === 'no_face') {
-                    messageDiv.textContent = "No face detected. Please look at the camera.";
+                    messageDiv.textContent = data.message || "No face detected. Please look at the camera.";
                     messageDiv.className = "mt-2 text-warning";
                     setTimeout(captureFace, 500);
                 } else {
@@ -148,8 +160,8 @@
         }
     }
 
-    function updateProgress() {
-        const percent = (captured / 25) * 100;
+    function updateProgress(target = captureTarget) {
+        const percent = (captured / target) * 100;
         progressBar.style.width = percent + '%';
         countSpan.textContent = captured;
     }

@@ -2,6 +2,7 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from .attendance_rules import ABSENT_STATUSES, is_absent_status, is_late_status, is_on_time_status, is_present_status
 from .models import Attendance, User
 
 class AnalyticsEngine:
@@ -65,6 +66,9 @@ class AnalyticsEngine:
                 'employment_type': user.employment_type,
                 'timestamp': log.timestamp,
                 'status': log.status,
+                'session': getattr(log, 'session', None),
+                'event_type': getattr(log, 'event_type', None),
+                'auto_generated': getattr(log, 'auto_generated', 0),
                 'hour': log.timestamp.hour,
                 'weekday': log.timestamp.weekday()  # 0=Mon, 6=Sun
             })
@@ -106,11 +110,11 @@ class AnalyticsEngine:
             wd = row['weekday']
             status = row['status']
             
-            if status in ['Present', 'On Time']:
+            if is_on_time_status(status):
                 present_counts[wd] += 1
-            elif status in ['Late', 'Tardy']:
+            elif is_late_status(status):
                 late_counts[wd] += 1
-            elif status == 'Absent':
+            elif is_absent_status(status):
                 absent_counts[wd] += 1
 
         return {
@@ -132,7 +136,7 @@ class AnalyticsEngine:
         if current_df.empty:
             return {"growth": 0, "engagement_change": 0}
             
-        current_present = len(current_df[current_df['status'].isin(['Present', 'On Time'])])
+        current_present = len(current_df[current_df['status'].apply(is_on_time_status)])
         current_total = len(current_df)
         current_rate = (current_present / current_total * 100) if current_total > 0 else 0
 
@@ -144,7 +148,7 @@ class AnalyticsEngine:
         if prev_df.empty:
             return {"growth": 100, "engagement_change": current_rate}
 
-        prev_present = len(prev_df[prev_df['status'].isin(['Present', 'On Time'])])
+        prev_present = len(prev_df[prev_df['status'].apply(is_on_time_status)])
         prev_total = len(prev_df)
         prev_rate = (prev_present / prev_total * 100) if prev_total > 0 else 0
 
@@ -203,11 +207,11 @@ class AnalyticsEngine:
             
             status = row['status']
             
-            if status in ['Present', 'On Time']:
+            if is_on_time_status(status):
                 present_counts[day_idx] += 1
-            elif status in ['Late', 'Tardy']:
+            elif is_late_status(status):
                 late_counts[day_idx] += 1
-            elif status == 'Absent':
+            elif is_absent_status(status):
                 absent_counts[day_idx] += 1
                 
         return {
@@ -243,8 +247,8 @@ class AnalyticsEngine:
                 continue
 
             total_days = len(user_logs)
-            late_count = len(user_logs[user_logs['status'].isin(['Late', 'Tardy'])])
-            absent_count = len(user_logs[user_logs['status'] == 'Absent'])
+            late_count = len(user_logs[user_logs['status'].apply(is_late_status)])
+            absent_count = len(user_logs[user_logs['status'].isin(list(ABSENT_STATUSES))])
             
             late_rate = (late_count / total_days) * 100 if total_days > 0 else 0
             absent_rate = (absent_count / total_days) * 100 if total_days > 0 else 0
@@ -337,14 +341,16 @@ class AnalyticsEngine:
             return {
                 'labels': [
                     'Late',
+                    'Absent',
                     'Undertime',
                     'Official Time',
                     'Official Business',
                     'Leave'
                 ],
-                'data': [0, 0, 0, 0, 0],
+                'data': [0, 0, 0, 0, 0, 0],
                 'colors': [
                     '#0d6efd',
+                    '#dc3545',
                     '#6c757d',
                     '#adb5bd',
                     '#343a40',
@@ -356,6 +362,7 @@ class AnalyticsEngine:
 
         categories = {
             'Late': 0,
+            'Absent': 0,
             'Undertime': 0,
             'Official Time': 0,
             'Official Business': 0,
@@ -363,9 +370,11 @@ class AnalyticsEngine:
         }
 
         for status, count in status_counts.items():
-            if status in ['Late', 'Tardy']:
+            if is_late_status(status):
                 categories['Late'] += int(count)
-            elif status in ['Present', 'On Time']:
+            elif is_absent_status(status):
+                categories['Absent'] += int(count)
+            elif is_on_time_status(status):
                 categories['Official Time'] += int(count)
             elif status == 'Excused':
                 categories['Leave'] += int(count)
@@ -374,6 +383,7 @@ class AnalyticsEngine:
         data = [categories[label] for label in labels]
         colors = [
             '#0d6efd',
+            '#dc3545',
             '#6c757d',
             '#adb5bd',
             '#343a40',
@@ -393,20 +403,28 @@ class AnalyticsEngine:
         """
         df = self.get_attendance_dataframe(start_date, end_date, employment_type, user_id)
         if df.empty:
-            return ["No data available for the selected period."]
+            return ["No attendance records were found for the selected dates."]
 
         insights = []
         
         # 1. Punctuality & Comparative Performance
         total = len(df)
-        on_time = len(df[df['status'].isin(['Present', 'On Time'])])
-        late = len(df[df['status'].isin(['Late', 'Tardy'])])
+        on_time = len(df[df['status'].apply(is_on_time_status)])
+        late = len(df[df['status'].apply(is_late_status)])
         punctuality_rate = (on_time / total * 100) if total > 0 else 0
         
         # Comparative indicator (vs 85% target)
         diff = punctuality_rate - 85
-        comparison = "above" if diff >= 0 else "below"
-        insights.append(f"Current punctuality rate is {punctuality_rate:.1f}%, which is {abs(diff):.1f}% {comparison} the organizational benchmark of 85%.")
+        if diff >= 0:
+            insights.append(
+                f"{punctuality_rate:.1f}% of recorded check-ins were on time. "
+                f"That is {abs(diff):.1f}% above the 85% punctuality goal."
+            )
+        else:
+            insights.append(
+                f"{punctuality_rate:.1f}% of recorded check-ins were on time. "
+                f"That is {abs(diff):.1f}% below the 85% punctuality goal."
+            )
 
         # 2. Peak Time & Anomaly Detection
         if not df.empty:
@@ -418,9 +436,15 @@ class AnalyticsEngine:
                 # Check for anomalies (e.g., unexpected late night check-ins)
                 off_hours = arrivals[~arrivals['hour'].between(6, 20)]
                 if not off_hours.empty:
-                    insights.append(f"Anomaly detected: {len(off_hours)} check-ins occurred outside standard business hours (6AM-8PM).")
+                    insights.append(
+                        f"{len(off_hours)} check-ins happened outside the usual 6:00 AM to 8:00 PM window. "
+                        "These may be worth reviewing."
+                    )
                 
-                insights.append(f"Peak arrival efficiency: {peak_count} check-ins consolidated at {peak_hour}:00, suggesting high terminal utilization during this window.")
+                peak_label = f"{peak_hour:02d}:00"
+                insights.append(
+                    f"The busiest check-in time was around {peak_label}, with {peak_count} attendance logs recorded at that hour."
+                )
 
         # 3. Weekly Trends & Engagement
         weekly = self.get_weekly_trends(start_date, end_date, employment_type, user_id)
@@ -432,6 +456,9 @@ class AnalyticsEngine:
             # Comparative weekly analysis
             avg_present = sum(weekly['present']) / 7
             performance = (max_present / avg_present * 100) - 100 if avg_present > 0 else 0
-            insights.append(f"{days[best_day_idx]} is the highest engagement day, outperforming the weekly average by {performance:.1f}%.")
+            insights.append(
+                f"{days[best_day_idx]} had the strongest attendance in this view, "
+                f"at {performance:.1f}% above the weekly average."
+            )
 
         return insights

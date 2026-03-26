@@ -1,7 +1,7 @@
 import os
+import os
 import cv2
 import mediapipe as mp
-
 import numpy as np
 import time
 import logging
@@ -9,7 +9,6 @@ from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass
 from PIL import Image
 
-logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -35,6 +34,8 @@ class FaceEngine:
         
         self.model_path = model_path
         self.faces_dir = faces_dir
+        self.face_size = (120, 120)
+        self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         
         # LBPH Recognizer setup
         try:
@@ -76,6 +77,10 @@ class FaceEngine:
         self.blink_count = 0
         self.eye_closed_start_time = 0
         self.max_eye_closed_duration = settings.BLINK_MAX_CLOSED_SEC
+        self.min_capture_face_px = 120
+        self.min_capture_blur_var = 85.0
+        self.min_capture_brightness = 50.0
+        self.max_capture_brightness = 205.0
         
 
 
@@ -125,6 +130,87 @@ class FaceEngine:
             logger.error(f"Face detection error: {e}")
                 
         return results
+
+    def preprocess_face(self, face_img: np.ndarray) -> np.ndarray:
+        """Normalize face images consistently for training and recognition."""
+        if face_img is None or face_img.size == 0:
+            raise ValueError("Empty face image")
+
+        if len(face_img.shape) == 3:
+            gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = face_img.copy()
+
+        interpolation = cv2.INTER_AREA if gray.shape[0] >= self.face_size[1] else cv2.INTER_CUBIC
+        gray = cv2.resize(gray, self.face_size, interpolation=interpolation)
+        gray = self.clahe.apply(gray)
+        return gray
+
+    def estimate_pose_bucket(self, l2d: Optional[np.ndarray]) -> str:
+        """Estimate a coarse pose bucket to encourage enrollment diversity."""
+        if l2d is None or len(l2d) <= 263:
+            return "center"
+
+        try:
+            nose = l2d[1]
+            left_eye = l2d[33]
+            right_eye = l2d[263]
+            forehead = l2d[10]
+            chin = l2d[152]
+
+            eye_center = (left_eye + right_eye) / 2.0
+            eye_distance = max(float(np.linalg.norm(right_eye - left_eye)), 1.0)
+            face_height = max(float(abs(chin[1] - forehead[1])), 1.0)
+
+            yaw_ratio = float((nose[0] - eye_center[0]) / eye_distance)
+            pitch_center_y = (forehead[1] + chin[1]) / 2.0
+            pitch_ratio = float((nose[1] - pitch_center_y) / face_height)
+
+            if yaw_ratio <= -0.08:
+                return "left"
+            if yaw_ratio >= 0.08:
+                return "right"
+            if pitch_ratio <= -0.04:
+                return "up"
+            if pitch_ratio >= 0.08:
+                return "down"
+        except Exception as e:
+            logger.debug(f"Pose estimation fallback: {e}")
+
+        return "center"
+
+    def assess_capture_quality(self, face_img: np.ndarray, l2d: Optional[np.ndarray] = None) -> Dict[str, Any]:
+        """Return simple quality metrics and acceptance guidance for enrollment captures."""
+        pose_bucket = self.estimate_pose_bucket(l2d)
+        if face_img is None or face_img.size == 0:
+            return {"ok": False, "reason": "No face crop available.", "pose_bucket": pose_bucket}
+
+        if len(face_img.shape) == 3:
+            gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = face_img
+
+        h, w = gray.shape[:2]
+        if min(h, w) < self.min_capture_face_px:
+            return {"ok": False, "reason": "Move closer so your face fills more of the frame.", "pose_bucket": pose_bucket}
+
+        brightness = float(gray.mean())
+        if brightness < self.min_capture_brightness:
+            return {"ok": False, "reason": "Lighting is too dark. Move to a brighter area.", "pose_bucket": pose_bucket}
+        if brightness > self.max_capture_brightness:
+            return {"ok": False, "reason": "Lighting is too bright. Reduce glare on your face.", "pose_bucket": pose_bucket}
+
+        blur_variance = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        if blur_variance < self.min_capture_blur_var:
+            return {"ok": False, "reason": "Hold still for a sharper capture.", "pose_bucket": pose_bucket}
+
+        return {
+            "ok": True,
+            "reason": "Capture accepted.",
+            "pose_bucket": pose_bucket,
+            "blur_variance": blur_variance,
+            "brightness": brightness,
+        }
 
     def calculate_ear(self, l2d: np.ndarray) -> float:
         """Improved EAR calculation using 6 points per eye for higher precision"""
@@ -210,14 +296,8 @@ class FaceEngine:
     def recognize_face(self, face_img):
         """Simple LBPH Recognition"""
         if not self.model_loaded: return -1, 0.0
-        
-        if len(face_img.shape) == 3:
-            face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-            
-        # Basic preprocessing
-        face_img = cv2.resize(face_img, (120, 120))
-        face_img = cv2.equalizeHist(face_img)
-        
+
+        face_img = self.preprocess_face(face_img)
         label, confidence = self.recognizer.predict(face_img)
         return label, confidence
 
@@ -229,17 +309,20 @@ class FaceEngine:
         for user_id in os.listdir(self.faces_dir):
             u_path = os.path.join(self.faces_dir, user_id)
             if not os.path.isdir(u_path): continue
-            try: uid = int(user_id)
-            except: continue
+            try:
+                uid = int(user_id)
+            except ValueError:
+                continue
             
             for img_name in os.listdir(u_path):
                 if img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
                     try:
                         p_img = Image.open(os.path.join(u_path, img_name)).convert('L')
                         img_np = np.array(p_img, 'uint8')
-                        img_np = cv2.resize(img_np, (120, 120))
-                        img_np = cv2.equalizeHist(img_np)
+                        img_np = self.preprocess_face(img_np)
                         faces.append(img_np)
+                        ids.append(uid)
+                        faces.append(cv2.flip(img_np, 1))
                         ids.append(uid)
                     except Exception as e:
                         logger.error(f"Error processing image {img_name}: {e}")

@@ -338,6 +338,7 @@
         let currentVerifiedUserName = null;
         let isCameraActive = false;
         let currentActionType = null; // 'login' or 'logout'
+        let isSubmittingAttendance = false;
 
         const btnActivateLogin = document.getElementById('btn-activate-login');
         const btnActivateLogout = document.getElementById('btn-activate-logout');
@@ -498,7 +499,7 @@
                     }
 
                     // Auto-record if verified and logic is in manual trigger mode
-                    if (mainFace.verified && mainFace.user_id && currentActionType) {
+                    if (mainFace.verified && mainFace.user_id && currentActionType && !isSubmittingAttendance) {
                         const action = currentActionType;
                         currentActionType = null; // Clear immediately to prevent duplicate loops (409 Conflict)
                         recordAttendance(mainFace.user_id, action);
@@ -534,24 +535,6 @@
             });
         }
 
-        function recordAttendance(userId, action) {
-            statusMsg.textContent = "Verifying biometric signature...";
-            postJson('/api/attendance/record', { user_id: userId, action: action })
-                .then(res => {
-                    if (res.status === 'success') {
-                        showNotification(action === 'login' ? 'Log In Successful' : 'Log Out Successful', res.message);
-                        fetchRecentLogs();
-                        setTimeout(stopCamera, 2000); // Return to standby after success
-                    } else {
-                        showNotification('Authentication Error', res.message || 'Error recording attendance.', false);
-                        currentActionType = action; // Retry on next frame
-                    }
-                })
-                .catch(() => {
-                    showNotification('System Error', 'Unable to connect to server.', false);
-                });
-        }
-
         // --- Attendance action handlers ---
         const attendanceToast = new bootstrap.Toast(document.getElementById('attendanceToast'));
         const toastEl = document.getElementById('attendanceToast');
@@ -576,6 +559,8 @@
         }
 
         function recordAttendance(userId, action) {
+            if (isSubmittingAttendance) return;
+            isSubmittingAttendance = true;
             statusMsg.textContent = "Verifying biometric signature...";
             postJson('/api/attendance/record', { user_id: userId, action: action })
                 .then(res => {
@@ -592,6 +577,9 @@
                 .catch(() => {
                     showNotification('System Error', 'Unable to connect to server.', false);
                     setTimeout(stopCamera, 3000);
+                })
+                .finally(() => {
+                    isSubmittingAttendance = false;
                 });
         }
 

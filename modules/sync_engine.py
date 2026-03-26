@@ -2,12 +2,20 @@ import threading
 import time
 import requests
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional, List, Dict, Any
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from .models import Attendance, Base, User
-from .face_engine import FaceEngine
+from .attendance_rules import (
+    AM_SESSION,
+    PM_SESSION,
+    infer_event_type,
+    is_absent_status,
+    is_login_record,
+    normalize_session,
+    session_absent_status,
+)
+from .models import Attendance, Base, User, ensure_attendance_schema
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -44,8 +52,10 @@ class SyncEngine:
         self.device_id = device_id
         
         # Database setup for the local SQLite store
-        self.engine = create_engine(database_url)
+        connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+        self.engine = create_engine(database_url, connect_args=connect_args)
         Base.metadata.create_all(self.engine)
+        ensure_attendance_schema(self.engine)
         self.Session = sessionmaker(bind=self.engine)
         
         # Database setup for the remote store (if provided)
@@ -53,14 +63,14 @@ class SyncEngine:
         self.RemoteSession = None
         if self.remote_db_url:
             try:
-                self.remote_engine = create_engine(self.remote_db_url)
+                remote_connect_args = {"check_same_thread": False} if self.remote_db_url.startswith("sqlite") else {}
+                self.remote_engine = create_engine(self.remote_db_url, connect_args=remote_connect_args)
+                Base.metadata.create_all(self.remote_engine)
+                ensure_attendance_schema(self.remote_engine)
                 self.RemoteSession = sessionmaker(bind=self.remote_engine)
                 logger.info("Remote database connection initialized for syncing.")
             except Exception as e:
                 logger.error(f"Failed to initialize remote database: {e}")
-        
-        # Face Engine (can be used for related tasks, e.g., thermal status)
-        self.face_engine = FaceEngine()
         
         # Thread control for the background sync worker
         self.sync_thread = None
@@ -87,7 +97,7 @@ class SyncEngine:
             self.sync_thread.start()
             logger.info("Sync worker thread started.")
 
-    def _auto_mark_absent_for_date(self, target_date: datetime.date) -> int:
+    def _auto_mark_absent_for_date(self, target_date: date) -> int:
         session = self.Session()
         try:
             start = datetime(target_date.year, target_date.month, target_date.day, 0, 0, 0)
@@ -96,39 +106,53 @@ class SyncEngine:
             users = session.query(User).all()
             created = 0
             for user in users:
-                existing_any = (
-                    session.query(Attendance.id)
+                day_records = (
+                    session.query(Attendance)
                     .filter(
                         Attendance.user_id == user.id,
                         Attendance.timestamp >= start,
                         Attendance.timestamp <= end,
                     )
-                    .first()
+                    .all()
                 )
-                if existing_any:
-                    continue
 
-                hh, mm = 6, 0
-                sch = (user.schedule_start or "").strip()
-                if len(sch) >= 5 and sch[2] == ":":
-                    try:
-                        hh = int(sch[:2])
-                        mm = int(sch[3:5])
-                    except Exception:
-                        hh, mm = 6, 0
+                login_sessions = set()
+                absent_sessions = set()
 
-                record_ts = datetime(target_date.year, target_date.month, target_date.day, hh, mm, 0)
-                record = Attendance(
-                    sync_key=str(uuid.uuid4()),
-                    user_id=user.id,
-                    timestamp=record_ts,
-                    status="Absent",
-                    notes=None,
-                    device_id=self.device_id,
-                    synced=0,
-                )
-                session.add(record)
-                created += 1
+                for record in day_records:
+                    record_status = record.status or ""
+                    record_session = normalize_session(getattr(record, "session", None), record.timestamp)
+                    record_event_type = getattr(record, "event_type", None)
+
+                    if record_status == "Absent" and record_session is None:
+                        absent_sessions.update({AM_SESSION, PM_SESSION})
+                        continue
+
+                    if record_session and is_login_record(record_status, record_event_type):
+                        login_sessions.add(record_session)
+                    if record_session and is_absent_status(record_status):
+                        absent_sessions.add(record_session)
+
+                for session_name in (AM_SESSION, PM_SESSION):
+                    if session_name in login_sessions or session_name in absent_sessions:
+                        continue
+
+                    record_hour = 8 if session_name == AM_SESSION else 13
+                    record_ts = datetime(target_date.year, target_date.month, target_date.day, record_hour, 0, 0)
+                    record = Attendance(
+                        sync_key=str(uuid.uuid4()),
+                        user_id=user.id,
+                        timestamp=record_ts,
+                        status=session_absent_status(session_name),
+                        session=session_name,
+                        event_type="auto_absent",
+                        auto_generated=1,
+                        notes=None,
+                        device_id=self.device_id,
+                        synced=0,
+                    )
+                    session.add(record)
+                    created += 1
 
             if created:
                 session.commit()
@@ -184,7 +208,7 @@ class SyncEngine:
             # Using a reliable hostname instead of an IP for the check
             requests.get('https://www.google.com', timeout=3)
             return True
-        except:
+        except requests.RequestException:
             return False
 
     def _sync_pending(self):
@@ -214,6 +238,9 @@ class SyncEngine:
                             'user_id': r.user_id,
                             'timestamp': r.timestamp.isoformat(),
                             'status': r.status,
+                            'session': r.session,
+                            'event_type': r.event_type,
+                            'auto_generated': r.auto_generated,
                             'notes': r.notes,
                             'device_id': r.device_id,
                             'synced': 1,
@@ -282,6 +309,9 @@ class SyncEngine:
                         user_id=local_r.user_id,
                         timestamp=local_r.timestamp,
                         status=local_r.status,
+                        session=local_r.session,
+                        event_type=local_r.event_type,
+                        auto_generated=local_r.auto_generated,
                         notes=local_r.notes,
                         device_id=local_r.device_id,
                         synced=1,
@@ -290,6 +320,9 @@ class SyncEngine:
                     remote_session.add(new_remote_r)
                 else:
                     remote_r.status = local_r.status
+                    remote_r.session = local_r.session
+                    remote_r.event_type = local_r.event_type
+                    remote_r.auto_generated = local_r.auto_generated
                     remote_r.notes = local_r.notes
                     remote_r.synced_at = datetime.now()
             
@@ -352,7 +385,16 @@ class SyncEngine:
             logger.error(f"Unexpected exception during Supabase sync: {e}")
             return False
 
-    def record_attendance(self, user_id: int, status: str, notes: str = None) -> str:
+    def record_attendance(
+        self,
+        user_id: int,
+        status: str,
+        notes: str = None,
+        timestamp: datetime | None = None,
+        session: str | None = None,
+        event_type: str | None = None,
+        auto_generated: bool = False,
+    ) -> str:
         """
         Records a new attendance entry to the local database.
 
@@ -366,21 +408,31 @@ class SyncEngine:
         Returns:
             str: The unique sync key for the new record.
         """
-        session = self.Session()
+        db_session = self.Session()
         try:
             sync_key = str(uuid.uuid4())
+            record_ts = timestamp or datetime.now()
             record = Attendance(
-                sync_key=sync_key, user_id=user_id, status=status,
-                notes=notes, device_id=self.device_id, synced=0
+                sync_key=sync_key,
+                user_id=user_id,
+                timestamp=record_ts,
+                status=status,
+                session=normalize_session(session, record_ts),
+                event_type=infer_event_type(status, event_type),
+                auto_generated=1 if auto_generated else 0,
+                notes=notes,
+                device_id=self.device_id,
+                synced=0,
             )
-            session.add(record)
-            session.commit()
+            db_session.add(record)
+            db_session.commit()
             return sync_key
+        except Exception:
+            db_session.rollback()
+            raise
         finally:
-            session.close()
+            db_session.close()
 
     def get_sync_stats(self) -> Dict[str, Any]:
         """Returns the current synchronization statistics."""
-        stats = self.sync_stats.copy()
-        stats['thermal'] = self.face_engine.get_thermal_status()
-        return stats
+        return self.sync_stats.copy()

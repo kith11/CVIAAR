@@ -45,8 +45,8 @@ class Camera:
                     success, frame = self.video.read()
                     if success:
                         return frame
-                except:
-                    pass
+                except Exception:
+                    return None
         return None
 
     def get_jpeg_frame(self):
