@@ -72,7 +72,7 @@ except ImportError:
     local_redis = None
 
 from config import settings
-from modules.models import Base, User, Attendance, AttendanceEdit, ExcuseNote, ensure_attendance_schema
+from modules.models import Base, User, Attendance, AttendanceEdit, AuditEvent, ExcuseNote, ensure_attendance_schema
 # Heavy modules moved into conditional blocks below
 # from modules.camera import Camera
 # from modules.face_engine import FaceEngine
@@ -1029,6 +1029,67 @@ def require_staff_page(request: Request, db: Session) -> tuple[User | None, Resp
         return user, None
     return None, RedirectResponse(url="/staff_portal", status_code=303)
 
+
+def get_actor_label(request: Request) -> str:
+    role = request.session.get(SESSION_ROLE_KEY)
+    if role == "admin":
+        return "admin"
+    if role == "staff":
+        user_id = request.session.get(STAFF_SESSION_USER_ID_KEY)
+        return f"staff:{user_id}"
+    return "system"
+
+
+def record_audit_event(
+    db: Session,
+    *,
+    action_type: str,
+    entity_type: str,
+    entity_id: str | int | None,
+    actor: str,
+    summary: str,
+    details: str | None = None,
+) -> None:
+    try:
+        db.add(
+            AuditEvent(
+                action_type=action_type,
+                entity_type=entity_type,
+                entity_id=str(entity_id) if entity_id is not None else None,
+                actor=actor,
+                summary=summary,
+                details=details,
+            )
+        )
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logging.error("Audit event write failed: %s", exc)
+
+
+def record_audit_event_with_new_session(
+    *,
+    action_type: str,
+    entity_type: str,
+    entity_id: str | int | None,
+    actor: str,
+    summary: str,
+    details: str | None = None,
+) -> None:
+    db = SessionLocal()
+    try:
+        record_audit_event(
+            db,
+            action_type=action_type,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            actor=actor,
+            summary=summary,
+            details=details,
+        )
+    finally:
+        db.close()
+
 # --- Core Application Routes ---
 
 @app.get("/", response_class=HTMLResponse)
@@ -1158,15 +1219,44 @@ async def audit_logs(request: Request, db: Session = Depends(get_db)):
         return guard
     
     try:
-        # Fetch edits joined with attendance logs and users
-        edits = db.query(AttendanceEdit, Attendance, User).join(
-            Attendance, AttendanceEdit.attendance_id == Attendance.id
-        ).join(
-            User, Attendance.user_id == User.id
-        ).order_by(AttendanceEdit.edited_at.desc()).all()
+        events = []
+
+        generic_events = (
+            db.query(AuditEvent)
+            .order_by(AuditEvent.created_at.desc())
+            .all()
+        )
+        for event in generic_events:
+            events.append({
+                "timestamp": event.created_at,
+                "actor": event.actor or "system",
+                "action": event.action_type.replace("_", " ").title(),
+                "target": event.summary,
+                "details": event.details or "",
+                "kind": "audit",
+            })
+
+        legacy_edits = (
+            db.query(AttendanceEdit, Attendance, User)
+            .join(Attendance, AttendanceEdit.attendance_id == Attendance.id)
+            .join(User, Attendance.user_id == User.id)
+            .order_by(AttendanceEdit.edited_at.desc())
+            .all()
+        )
+        for edit, log, user in legacy_edits:
+            events.append({
+                "timestamp": edit.edited_at,
+                "actor": edit.edited_by or "admin",
+                "action": "Attendance Edit",
+                "target": f"{user.name} | Record {log.id}",
+                "details": f"{edit.previous_status} -> {edit.new_status}" + (f" | {edit.new_notes}" if edit.new_notes else ""),
+                "kind": "legacy",
+            })
+
+        events.sort(key=lambda item: item["timestamp"] or datetime.min, reverse=True)
         
         return render_template(request, "audit_logs.html", {
-            "edits": edits
+            "events": events
         })
     except Exception as e:
         logging.error(f"Error in audit logs: {e}")
@@ -1253,6 +1343,12 @@ async def update_user_post(request: Request, user_id: int,
         request.state.flash("This email address is already in use by another user.", "danger")
         return RedirectResponse(url=f"/edit_user/{user_id}", status_code=303)
     
+    previous_name = user.name
+    previous_email = user.email
+    previous_employment_type = user.employment_type
+    previous_schedule = f"{user.schedule_start or '06:00'}-{user.schedule_end or '19:00'}"
+    previous_role = user.role
+
     # Update user data
     user.name = name.strip()
     user.email = email.strip()
@@ -1265,6 +1361,21 @@ async def update_user_post(request: Request, user_id: int,
         request.state.flash("Could not update the user profile right now.", "danger")
         return RedirectResponse(url=f"/edit_user/{user_id}", status_code=303)
 
+    record_audit_event(
+        db,
+        action_type="update_user",
+        entity_type="user",
+        entity_id=user.id,
+        actor=get_actor_label(request),
+        summary=f"Updated user profile for {user.name}",
+        details=(
+            f"name: {previous_name} -> {user.name}; "
+            f"email: {previous_email} -> {user.email}; "
+            f"type: {previous_employment_type} -> {user.employment_type}; "
+            f"schedule: {previous_schedule} -> {user.schedule_start}-{user.schedule_end}; "
+            f"role: {previous_role} -> {user.role}"
+        ),
+    )
     request.state.flash(f"User profile for {user.name} updated successfully.", "success")
     return RedirectResponse(url="/admin", status_code=303)
 
@@ -1391,8 +1502,6 @@ async def generate_report(
 @app.get("/staff_portal", response_class=HTMLResponse)
 async def staff_portal_get(request: Request, db: Session = Depends(get_db)):
     """Serves the staff portal page where users can view their own attendance."""
-    if is_admin_authenticated(request):
-        return RedirectResponse(url="/admin", status_code=303)
     user = get_staff_session_user(request, db)
     return render_template(request, "staff_portal.html", build_staff_portal_context(db, user))
 
@@ -1403,9 +1512,6 @@ async def staff_portal_post(request: Request,
     """
     Authenticates a staff member using their 6-digit staff code.
     """
-    if is_admin_authenticated(request):
-        return RedirectResponse(url="/admin", status_code=303)
-
     code = (staff_code or "").strip()
     if not code:
         return render_template(request, "staff_portal.html", build_staff_portal_context(db, None, "Enter your 6-digit staff code."))
@@ -1583,6 +1689,15 @@ async def add_user(request: Request, name: str = Form(...), email: str = Form(..
 
     user_dir = os.path.join(basedir, 'data', 'faces', str(new_user.id))
     os.makedirs(user_dir, exist_ok=True)
+    record_audit_event(
+        db,
+        action_type="create_user",
+        entity_type="user",
+        entity_id=new_user.id,
+        actor=get_actor_label(request),
+        summary=f"Created user {new_user.name}",
+        details=f"email={new_user.email}; staff_code={new_user.staff_code}; employment_type={new_user.employment_type}",
+    )
     
     return RedirectResponse(url=f"/enroll/{new_user.id}", status_code=303)
 
@@ -2064,6 +2179,8 @@ async def delete_user(user_id: int, request: Request, background_tasks: Backgrou
 
     user = db.get(User, user_id)
     if user:
+        deleted_name = user.name
+        deleted_email = user.email
         db.query(Attendance).filter(Attendance.user_id == user.id).delete()
         db.delete(user)
         if not safe_commit(db, f"Delete user {user_id}"):
@@ -2092,7 +2209,16 @@ async def delete_user(user_id: int, request: Request, background_tasks: Backgrou
         if face_engine:
             background_tasks.add_task(train_and_reload_model_task)
 
-        request.state.flash(f"User {user.name} has been deleted.", "success")
+        record_audit_event(
+            db,
+            action_type="delete_user",
+            entity_type="user",
+            entity_id=user_id,
+            actor=get_actor_label(request),
+            summary=f"Deleted user {deleted_name}",
+            details=f"email={deleted_email or 'none'}",
+        )
+        request.state.flash(f"User {deleted_name} has been deleted.", "success")
     else:
         if face_engine:
             end_model_mutation()
@@ -2113,6 +2239,14 @@ async def retrain_model(request: Request, background_tasks: BackgroundTasks):
         
     if face_engine:
         if queue_model_retrain(background_tasks):
+            record_audit_event_with_new_session(
+                action_type="retrain_model",
+                entity_type="face_model",
+                entity_id=None,
+                actor=get_actor_label(request),
+                summary="Queued face model retraining",
+                details="Triggered from admin dashboard.",
+            )
             request.state.flash("Model retraining has been initiated. This may take a few minutes.", "info")
         else:
             request.state.flash("Face model is already updating. Please wait for the current run to finish.", "warning")
@@ -2129,6 +2263,14 @@ async def api_train_model(request: Request, background_tasks: BackgroundTasks):
         return guard
     if face_engine:
         if queue_model_retrain(background_tasks):
+            record_audit_event_with_new_session(
+                action_type="retrain_model",
+                entity_type="face_model",
+                entity_id=None,
+                actor=get_actor_label(request),
+                summary="Queued face model retraining",
+                details="Triggered via admin API.",
+            )
             return JSONResponse({'status': 'success', 'message': 'Model training initiated.'})
         return JSONResponse({'status': 'busy', 'message': 'Face model is already updating.'}, status_code=409)
     else:
@@ -2320,6 +2462,14 @@ async def request_early_report(
         request.state.flash("The report was queued, but the send status could not be saved.", "warning")
         return RedirectResponse(url="/staff_portal", status_code=303)
 
+    record_audit_event_with_new_session(
+        action_type="request_report",
+        entity_type="user_report",
+        entity_id=user.id,
+        actor=get_actor_label(request),
+        summary=f"Queued attendance report email for {user.name}",
+        details=f"month={report_month}; year={report_year}; recipient={user.email}",
+    )
     request.state.flash(
         f"Attendance report for {user.name} was queued for delivery to {user.email}. Please allow a few minutes for arrival.",
         "success",
@@ -2333,6 +2483,7 @@ async def reset_faces(user_id: int, request: Request, db: Session = Depends(get_
     guard = require_admin_api(request)
     if guard:
         return guard
+    user = db.get(User, user_id)
     if face_engine and not try_begin_model_mutation():
         return JSONResponse({'status': 'busy', 'message': 'Face model is already updating.'}, status_code=409)
 
@@ -2342,6 +2493,14 @@ async def reset_faces(user_id: int, request: Request, db: Session = Depends(get_
             if os.path.exists(user_dir):
                 shutil.rmtree(user_dir)
                 os.makedirs(user_dir, exist_ok=True)
+                record_audit_event_with_new_session(
+                    action_type="reset_faces",
+                    entity_type="face_data",
+                    entity_id=user_id,
+                    actor=get_actor_label(request),
+                    summary=f"Reset face data for {user.name if user else f'user {user_id}'}",
+                    details="Face directory cleared for re-enrollment.",
+                )
                 return JSONResponse({'status': 'success', 'message': f'Faces reset for user {user_id}'})
             return JSONResponse({'status': 'error', 'message': 'User directory not found'}, status_code=404)
     except ModelBusyError as exc:

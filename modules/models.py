@@ -115,6 +115,21 @@ class AttendanceEdit(Base):
     edited_at = Column(DateTime, default=datetime.now)
 
 
+class AuditEvent(Base):
+    """Generic admin/system audit event."""
+
+    __tablename__ = "audit_events"
+
+    id = Column(Integer, primary_key=True)
+    action_type = Column(String(50), nullable=False)
+    entity_type = Column(String(50), nullable=False)
+    entity_id = Column(String(50), nullable=True)
+    actor = Column(String(100), nullable=True)
+    summary = Column(String(200), nullable=False)
+    details = Column(String(500), nullable=True)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+
+
 class ExcuseNote(Base):
     """
     Represents an excuse note submitted for a specific attendance record.

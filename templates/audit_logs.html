@@ -2,8 +2,8 @@
 
 {% block content %}
 <div class="mb-5">
-    <h1 class="section-title">Audit Logs</h1>
-    <p class="section-desc">Track all modifications to attendance records</p>
+    <h1 class="section-title">Activity Log</h1>
+    <p class="section-desc">Review recent admin and system actions such as user changes, face resets, model retraining, and report requests.</p>
 </div>
 
 <div class="card p-0 overflow-hidden">
@@ -12,27 +12,29 @@
             <thead>
                 <tr>
                     <th class="ps-4">Time</th>
-                    <th>Staff</th>
-                    <th>Change</th>
-                    <th>Editor</th>
-                    <th class="pe-4">Notes</th>
+                    <th>Actor</th>
+                    <th>Action</th>
+                    <th>Target</th>
+                    <th class="pe-4">Details</th>
                 </tr>
             </thead>
             <tbody>
-                {% for edit, log, user in edits %}
+                {% for event in events %}
                 <tr>
-                    <td class="ps-4 text-muted small">{{ edit.edited_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                    <td><div class="fw-bold">{{ user.name }}</div><div class="smaller text-muted">Record ID: {{ log.id }}</div></td>
+                    <td class="ps-4 text-muted small">{{ event.timestamp.strftime('%Y-%m-%d %H:%M:%S') if event.timestamp else '' }}</td>
+                    <td><span class="text-muted">{{ event.actor }}</span></td>
                     <td>
-                        <span class="badge bg-light text-dark border">{{ edit.previous_status }}</span>
-                        <i class="bi bi-arrow-right mx-2 text-muted"></i>
-                        <span class="badge bg-primary">{{ edit.new_status }}</span>
+                        <span class="badge {{ 'bg-light text-dark border' if event.kind == 'legacy' else 'bg-primary' }}">
+                            {{ event.action }}
+                        </span>
                     </td>
-                    <td><span class="text-muted">{{ edit.edited_by }}</span></td>
-                    <td class="pe-4 small">{{ edit.new_notes }}</td>
+                    <td>
+                        <div class="fw-bold">{{ event.target }}</div>
+                    </td>
+                    <td class="pe-4 small">{{ event.details }}</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="5" class="text-center py-5 text-muted">No audit logs found.</td></tr>
+                <tr><td colspan="5" class="text-center py-5 text-muted">No activity has been recorded yet.</td></tr>
                 {% endfor %}
             </tbody>
         </table>

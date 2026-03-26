@@ -28,6 +28,7 @@ app_module = importlib.import_module("app")
 config_module = importlib.import_module("config")
 User = app_module.User
 Attendance = app_module.Attendance
+AuditEvent = app_module.AuditEvent
 
 
 class DeploymentHardeningTests(unittest.TestCase):
@@ -44,6 +45,7 @@ class DeploymentHardeningTests(unittest.TestCase):
         self.client.cookies.clear()
         session = app_module.SessionLocal()
         try:
+            session.query(AuditEvent).delete()
             session.query(Attendance).delete()
             session.query(User).delete()
             session.commit()
@@ -134,6 +136,30 @@ class DeploymentHardeningTests(unittest.TestCase):
         self.assertIn("You can only request your own attendance report.", response.text)
         self.assertNotIn("Bob Example", response.text)
         self.assertIn("Alice Example", response.text)
+
+    def test_admin_can_open_staff_portal_sign_in_page(self):
+        login = self.client.post("/login", data={"password": "unit-test-admin-password"}, follow_redirects=False)
+        self.assertEqual(login.status_code, 303)
+
+        response = self.client.get("/staff_portal")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Enter Staff Code", response.text)
+
+    def test_audit_logs_show_recorded_admin_actions(self):
+        login = self.client.post("/login", data={"password": "unit-test-admin-password"}, follow_redirects=True)
+        self.assertEqual(login.status_code, 200)
+
+        create_response = self.client.post(
+            "/add_user",
+            data={"name": "Audit User", "email": "audituser@gmail.com", "employment_type": "Full-time"},
+            follow_redirects=False,
+        )
+        self.assertEqual(create_response.status_code, 303)
+
+        audit_page = self.client.get("/audit_logs")
+        self.assertEqual(audit_page.status_code, 200)
+        self.assertIn("Activity Log", audit_page.text)
+        self.assertIn("Created user Audit User", audit_page.text)
 
 
 if __name__ == "__main__":
