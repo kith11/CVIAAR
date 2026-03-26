@@ -956,7 +956,7 @@ def render_template(request: Request, name: str, context: dict | None = None):
         "get_flashed_messages": request.state.get_flashed_messages
     }
     ctx.update(context or {})
-    return templates.TemplateResponse(name, ctx)
+    return templates.TemplateResponse(request, name, ctx)
 
 
 def clear_admin_session(request: Request) -> None:
