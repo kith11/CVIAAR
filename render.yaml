@@ -10,15 +10,17 @@ services:
       - key: APP_ROLE
         value: ADMIN_DASHBOARD
       - key: DATABASE_URL
-        sync: false # Set this in Render dashboard (e.g., Supabase Postgres URL)
+        sync: false # Required: set the direct Supabase/Postgres connection string in Render
       - key: SECRET_KEY
         generateValue: true
       - key: ADMIN_PASSWORD
-        value: admin123 # Change this immediately!
+        sync: false # Required: set a strong admin password in Render
       - key: UPSTASH_REDIS_URL
         sync: false
       - key: UPSTASH_REDIS_TOKEN
         sync: false
+      - key: DEBUG
+        value: false
       - key: PYTHON_VERSION
         value: 3.10.12
     healthCheckPath: /api/live-status

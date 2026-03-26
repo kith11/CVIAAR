@@ -46,8 +46,9 @@ This application is designed with an **Edge-to-Cloud** architecture:
 2. **Set up Environment Variables**:
    Create a `.env` file in the root directory and configure the following:
    - `HF_TOKEN`: HuggingFace token for AI Chatbot.
-   - `MAIL_USERNAME` & `MAIL_PASSWORD`: Gmail credentials for report sending.
-   - `SUPABASE_DB_URL`: Connection string for the Cloud database.
+   - `MAIL_USERNAME` & `MAIL_APP_PASSWORD`: Gmail SMTP credentials for report sending.
+   - `DATABASE_URL`: Direct Supabase/Postgres connection string for the cloud admin app.
+   - `SUPABASE_URL` & `SUPABASE_KEY`: Optional REST fallback for kiosk sync only.
 
 3. **Deploy using Docker**:
    ```bash
@@ -65,6 +66,8 @@ This project includes a complete Dockerized development and production environme
 
 1.  **Prerequisites**: Ensure you have [Docker](https://www.docker.com/get-started) and [Docker Compose](https://docs.docker.com/compose/install/) installed.
 2.  **Environment Configuration**: Ensure your `.env` file is present in the root directory. If you wish to use the local Dockerized services (Postgres and Redis) instead of remote ones (Supabase/Upstash), you can leave those variables empty or override them in the `docker-compose.yml` file.
+    - `ADMIN_DASHBOARD` deployments must have a valid `DATABASE_URL`, a strong `SECRET_KEY`, and a non-default `ADMIN_PASSWORD`.
+    - `LOCAL_KIOSK` deployments keep attendance on local SQLite and use `DATABASE_URL` only for remote sync.
 3.  **Start the Stack**:
     ```bash
     docker-compose up --build

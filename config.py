@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -6,12 +7,17 @@ class Settings(BaseSettings):
     # Core App Settings
     APP_ROLE: str = "LOCAL_KIOSK"
     DEVICE_ID: str = "local-device"
+    DEBUG: bool = False
     SECRET_KEY: str = "a-very-secret-key-that-you-should-change"
     ADMIN_PASSWORD: str = "admin123"
+    SESSION_MAX_AGE_SECONDS: int = 60 * 60 * 12
 
     # Database URLs
     SQLITE_DB_PATH: str = "data/offline/cviaar_local.sqlite3"
-    DATABASE_URL: str | None = None # For Supabase/Postgres
+    DATABASE_URL: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DATABASE_URL", "SUPABASE_DB_URL"),
+    )
     SUPABASE_URL: str | None = None
     SUPABASE_KEY: str | None = None
     SYNC_ENABLED: bool = True # Enable or disable the sync worker

@@ -110,7 +110,95 @@ app = FastAPI(
 
 # --- Middleware Configuration ---
 # SessionMiddleware is used for handling user login sessions.
-app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
+INSECURE_SECRET_KEYS = {
+    "",
+    "a-very-secret-key-that-you-should-change",
+    "supersecretkey_change_this_in_production",
+}
+INSECURE_ADMIN_PASSWORDS = {"", "admin123"}
+SESSION_ROLE_KEY = "role"
+STAFF_SESSION_USER_ID_KEY = "staff_user_id"
+ADMIN_SESSION_FLAG_KEY = "logged_in"
+
+
+def normalize_env_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().strip('"').strip("'")
+    return normalized or None
+
+
+def normalize_database_url(url: str | None) -> str | None:
+    normalized = normalize_env_value(url)
+    if normalized and normalized.startswith("postgres://"):
+        normalized = normalized.replace("postgres://", "postgresql://", 1)
+    return normalized
+
+
+def describe_database_connection_error(exc: Exception) -> str:
+    message = str(exc).lower()
+    if "tenant or user not found" in message or "password authentication failed" in message:
+        return "invalid database credentials or wrong Supabase pooler username"
+    if "could not translate host name" in message or "name or service not known" in message:
+        return "database host name could not be resolved"
+    if "ssl" in message:
+        return "SSL negotiation with the database failed"
+    if "timed out" in message or "timeout" in message:
+        return "database connection timed out"
+    if "connection refused" in message or "could not connect to server" in message:
+        return "database server is unreachable"
+    return "unexpected database connection failure"
+
+
+def get_database_url_hint(database_url: str | None) -> str | None:
+    normalized = normalize_database_url(database_url)
+    if not normalized:
+        return None
+
+    if ".pooler.supabase.com:6543" in normalized or ".pooler.supabase.com:5432" in normalized:
+        return (
+            "Supabase pooler URLs must be copied exactly from the Supabase Connect panel. "
+            "For pooler hosts, the username is usually project-specific, such as "
+            "'postgres.[PROJECT_REF]'. If Render is a long-running server, prefer the direct "
+            "database URL when your network supports it, or the Supavisor session pooler URL."
+        )
+
+    if ".supabase.co:5432" in normalized and "@db." in normalized:
+        return (
+            "This looks like a direct Supabase database URL. Ensure the host, password, and SSL "
+            "settings match the current values in the Supabase Connect panel."
+        )
+
+    return None
+
+
+def validate_runtime_settings(config=settings) -> None:
+    if config.APP_ROLE != "ADMIN_DASHBOARD":
+        return
+
+    issues = []
+    if not normalize_database_url(config.DATABASE_URL):
+        issues.append("DATABASE_URL is required in ADMIN_DASHBOARD mode.")
+    if normalize_env_value(config.SECRET_KEY) in INSECURE_SECRET_KEYS:
+        issues.append("SECRET_KEY must be replaced with a strong production secret.")
+    if normalize_env_value(config.ADMIN_PASSWORD) in INSECURE_ADMIN_PASSWORDS:
+        issues.append("ADMIN_PASSWORD must be replaced with a strong non-default value.")
+
+    if issues:
+        raise RuntimeError(" ".join(issues))
+
+
+validate_runtime_settings()
+
+session_cookie_secure = settings.APP_ROLE == "ADMIN_DASHBOARD" and not settings.DEBUG
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.SECRET_KEY,
+    same_site="lax",
+    https_only=session_cookie_secure,
+    max_age=settings.SESSION_MAX_AGE_SECONDS,
+    session_cookie="cviaar_session",
+)
 
 class FlashMiddleware(BaseHTTPMiddleware):
     """
@@ -207,31 +295,51 @@ templates = Jinja2Templates(directory=os.path.join(basedir, "templates"))
 # for a centralized admin dashboard.
 DEVICE_ID = os.getenv("DEVICE_ID", "local-device")
 
-# Determine the database URL based on the application's role and environment.
-# On Render or similar platforms, DATABASE_URL will point to a remote PostgreSQL.
-# In local kiosk mode, we fallback to SQLite.
-local_sqlite_url = f"sqlite:///{os.path.join(basedir, 'data', 'offline', 'cviaar_local.sqlite3')}"
-db_url = settings.DATABASE_URL or local_sqlite_url
+# In kiosk mode we always keep the primary write path on local SQLite.
+# In admin dashboard mode we require a working direct database connection.
+sqlite_path = normalize_env_value(settings.SQLITE_DB_PATH) or os.path.join("data", "offline", "cviaar_local.sqlite3")
+if not os.path.isabs(sqlite_path):
+    sqlite_path = os.path.join(basedir, sqlite_path)
+local_sqlite_url = f"sqlite:///{sqlite_path}"
+remote_database_url = normalize_database_url(settings.DATABASE_URL)
+supabase_rest_url = normalize_env_value(settings.SUPABASE_URL)
+supabase_rest_key = normalize_env_value(settings.SUPABASE_KEY)
 
-# Fix for SQLAlchemy 1.4+ which requires "postgresql://" instead of "postgres://"
-if db_url and db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-# The engine is configured with `check_same_thread=False` ONLY for SQLite.
-connect_args = {"check_same_thread": False} if db_url.startswith("sqlite") else {}
-try:
-    engine = create_engine(db_url, connect_args=connect_args)
-    # Test connection
-    with engine.connect() as conn:
+def create_checked_engine(database_url: str):
+    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+    checked_engine = create_engine(database_url, connect_args=connect_args)
+    with checked_engine.connect() as conn:
         conn.execute(text("SELECT 1"))
-    logging.info(f"Successfully connected to database: {db_url.split('@')[-1] if '@' in db_url else 'SQLite'}")
+    return checked_engine
+
+
+db_url = remote_database_url if settings.APP_ROLE == "ADMIN_DASHBOARD" else local_sqlite_url
+try:
+    engine = create_checked_engine(db_url)
+    target_label = "remote database" if db_url != local_sqlite_url else "local SQLite database"
+    logging.info("Successfully connected to %s.", target_label)
 except Exception as e:
-    logging.error(f"Database connection failed: {e}")
-    # Fallback to local SQLite if remote fails
-    if db_url != local_sqlite_url:
-        logging.warning("Falling back to local SQLite database.")
-        db_url = local_sqlite_url
-        engine = create_engine(db_url, connect_args={"check_same_thread": False})
+    diagnosis = describe_database_connection_error(e)
+    logging.error("Database connection failed (%s): %s", diagnosis, e)
+    hint = get_database_url_hint(db_url)
+    if hint:
+        logging.error("Database URL hint: %s", hint)
+    if settings.APP_ROLE == "ADMIN_DASHBOARD":
+        raise RuntimeError(
+            f"ADMIN_DASHBOARD startup aborted: {diagnosis}. "
+            "Set a valid DATABASE_URL on Render or Supabase."
+        ) from e
+    logging.warning("Continuing in LOCAL_KIOSK mode with offline SQLite only.")
+    db_url = local_sqlite_url
+    engine = create_checked_engine(db_url)
+
+if settings.APP_ROLE == "LOCAL_KIOSK":
+    logging.info(
+        "Kiosk sync configuration: direct_db=%s, supabase_rest_fallback=%s",
+        "enabled" if remote_database_url else "disabled",
+        "enabled" if supabase_rest_url and supabase_rest_key else "disabled",
+    )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -298,10 +406,10 @@ if settings.APP_ROLE == "LOCAL_KIOSK":
     # SyncEngine is a background worker that syncs offline data with a remote server.
     if settings.SYNC_ENABLED:
         sync_engine = SyncEngine(
-            database_url=db_url, # Use the common db_url
-            supabase_url=settings.SUPABASE_URL or os.getenv("SUPABASE_URL", ""),
-            supabase_key=settings.SUPABASE_KEY or os.getenv("SUPABASE_KEY", ""),
-            remote_db_url=settings.DATABASE_URL, # Use direct Postgres URL if provided
+            database_url=local_sqlite_url,
+            supabase_url=supabase_rest_url or "",
+            supabase_key=supabase_rest_key or "",
+            remote_db_url=remote_database_url,
             sync_interval=30, # Sync every 30 seconds
             device_id=settings.DEVICE_ID
         )
@@ -449,7 +557,7 @@ def pose_instruction(bucket: str) -> str:
     return instructions.get(bucket, "Look straight at the camera.")
 
 
-def is_capture_too_similar(user_dir: str, pose_bucket: str, face_img: np.ndarray) -> bool:
+def is_capture_too_similar(user_dir: str, pose_bucket: str, face_img: Any) -> bool:
     candidates = []
     for name in os.listdir(user_dir):
         if not name.lower().endswith(".jpg"):
@@ -850,6 +958,77 @@ def render_template(request: Request, name: str, context: dict | None = None):
     ctx.update(context or {})
     return templates.TemplateResponse(name, ctx)
 
+
+def clear_admin_session(request: Request) -> None:
+    request.session.pop(ADMIN_SESSION_FLAG_KEY, None)
+    if request.session.get(SESSION_ROLE_KEY) == "admin":
+        request.session.pop(SESSION_ROLE_KEY, None)
+
+
+def clear_staff_session(request: Request) -> None:
+    request.session.pop(STAFF_SESSION_USER_ID_KEY, None)
+    if request.session.get(SESSION_ROLE_KEY) == "staff":
+        request.session.pop(SESSION_ROLE_KEY, None)
+
+
+def set_admin_session(request: Request) -> None:
+    request.session.clear()
+    request.session[ADMIN_SESSION_FLAG_KEY] = True
+    request.session[SESSION_ROLE_KEY] = "admin"
+
+
+def set_staff_session(request: Request, user_id: int) -> None:
+    request.session.clear()
+    request.session[SESSION_ROLE_KEY] = "staff"
+    request.session[STAFF_SESSION_USER_ID_KEY] = int(user_id)
+
+
+def is_admin_authenticated(request: Request) -> bool:
+    return bool(
+        request.session.get(ADMIN_SESSION_FLAG_KEY)
+        and request.session.get(SESSION_ROLE_KEY) == "admin"
+    )
+
+
+def get_staff_session_user_id(request: Request) -> int | None:
+    if request.session.get(SESSION_ROLE_KEY) != "staff":
+        return None
+    raw = request.session.get(STAFF_SESSION_USER_ID_KEY)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_staff_session_user(request: Request, db: Session) -> User | None:
+    user_id = get_staff_session_user_id(request)
+    if user_id is None:
+        return None
+    user = db.get(User, user_id)
+    if not user:
+        clear_staff_session(request)
+        return None
+    return user
+
+
+def require_admin_page(request: Request) -> Response | None:
+    if is_admin_authenticated(request):
+        return None
+    return RedirectResponse(url="/login", status_code=303)
+
+
+def require_admin_api(request: Request) -> Response | None:
+    if is_admin_authenticated(request):
+        return None
+    return JSONResponse({"status": "error", "message": "Admin authentication required."}, status_code=403)
+
+
+def require_staff_page(request: Request, db: Session) -> tuple[User | None, Response | None]:
+    user = get_staff_session_user(request, db)
+    if user:
+        return user, None
+    return None, RedirectResponse(url="/staff_portal", status_code=303)
+
 # --- Core Application Routes ---
 
 @app.get("/", response_class=HTMLResponse)
@@ -886,6 +1065,8 @@ async def video_feed():
 @app.get("/login", response_class=HTMLResponse)
 async def login_get(request: Request):
     """Serves the login page."""
+    if is_admin_authenticated(request):
+        return RedirectResponse(url="/admin", status_code=303)
     return render_template(request, "login.html")
 
 @app.post("/login")
@@ -898,20 +1079,28 @@ async def login_post(request: Request, password: str = Form(...)):
     """
     admin_password = settings.ADMIN_PASSWORD
     if password == admin_password:
-        request.session["logged_in"] = True
-        request.session["role"] = "admin"
+        set_admin_session(request)
         request.state.flash("Logged in successfully.", "success")
         return RedirectResponse(url="/admin", status_code=303)
     else:
         request.state.flash("Invalid password.", "danger")
         return render_template(request, "login.html")
 
+@app.get("/staff_logout")
+async def staff_logout(request: Request):
+    """Clears only the staff session and returns to the staff portal login screen."""
+    clear_staff_session(request)
+    request.state.flash("Signed out of the staff portal.", "info")
+    return RedirectResponse(url="/staff_portal", status_code=303)
+
 @app.get("/logout")
 async def logout(request: Request):
     """Clears the session to log the user out."""
+    current_role = request.session.get(SESSION_ROLE_KEY)
     request.session.clear()
     request.state.flash("Logged out.", "info")
-    return RedirectResponse(url="/", status_code=303)
+    redirect_target = "/staff_portal" if current_role == "staff" else "/"
+    return RedirectResponse(url=redirect_target, status_code=303)
 
 # --- Admin & Analytics Routes ---
 
@@ -922,8 +1111,9 @@ async def admin(request: Request, db: Session = Depends(get_db)):
     - Requires admin login.
     - Fetches and displays summary data: users, recent logs, attendance trends, and risk predictions.
     """
-    if not request.session.get("logged_in") or request.session.get("role") != "admin":
-        return RedirectResponse(url="/login")
+    guard = require_admin_page(request)
+    if guard:
+        return guard
 
     try:
         analytics = AnalyticsEngine(db)
@@ -963,8 +1153,9 @@ async def audit_logs(request: Request, db: Session = Depends(get_db)):
     Displays the audit logs for attendance modifications.
     - Requires admin login.
     """
-    if not request.session.get("logged_in") or request.session.get("role") != "admin":
-        return RedirectResponse(url="/login")
+    guard = require_admin_page(request)
+    if guard:
+        return guard
     
     try:
         # Fetch edits joined with attendance logs and users
@@ -983,8 +1174,11 @@ async def audit_logs(request: Request, db: Session = Depends(get_db)):
         return HTMLResponse(content="Internal Server Error: See logs for details.", status_code=500)
 
 @app.get("/api/users")
-async def api_get_users(db: Session = Depends(get_db)):
+async def api_get_users(request: Request, db: Session = Depends(get_db)):
     """API endpoint to fetch all users for selection lists."""
+    guard = require_admin_api(request)
+    if guard:
+        return guard
     users = db.query(User).all()
     return [{"id": u.id, "name": u.name} for u in users]
 
@@ -995,8 +1189,9 @@ async def advanced_analytics(request: Request, db: Session = Depends(get_db)):
     - Requires admin login.
     - Provides a more detailed view of attendance data with filtering options.
     """
-    if not request.session.get("logged_in") or request.session.get("role") != "admin":
-        return RedirectResponse(url="/login")
+    guard = require_admin_page(request)
+    if guard:
+        return guard
     
     analytics = AnalyticsEngine(db)
     users = db.query(User).order_by(User.name).all()
@@ -1012,8 +1207,9 @@ async def advanced_analytics(request: Request, db: Session = Depends(get_db)):
 @app.get("/edit_user/{user_id}", response_class=HTMLResponse)
 async def edit_user_get(request: Request, user_id: int, db: Session = Depends(get_db)):
     """Serves the user profile editing page."""
-    if not request.session.get("logged_in") or request.session.get("role") != "admin":
-        return RedirectResponse(url="/login")
+    guard = require_admin_page(request)
+    if guard:
+        return guard
     
     user = db.get(User, user_id)
     if not user:
@@ -1032,8 +1228,9 @@ async def update_user_post(request: Request, user_id: int,
                            role: str = Form("staff"),
                            db: Session = Depends(get_db)):
     """Handles user profile updates."""
-    if not request.session.get("logged_in") or request.session.get("role") != "admin":
-        return RedirectResponse(url="/login")
+    guard = require_admin_page(request)
+    if guard:
+        return guard
     
     user = db.get(User, user_id)
     if not user:
@@ -1073,8 +1270,9 @@ async def update_user_post(request: Request, user_id: int,
 
 @app.get("/export_attendance_csv")
 async def export_attendance_csv(request: Request, db: Session = Depends(get_db)):
-    if not request.session.get("logged_in") or request.session.get("role") != "admin":
-        return RedirectResponse(url="/login")
+    guard = require_admin_page(request)
+    if guard:
+        return guard
 
     query = (
         db.query(Attendance, User)
@@ -1145,8 +1343,9 @@ async def generate_report_form_missing_id(request: Request):
 
 @app.get("/generate_report_form/{user_id}", response_class=HTMLResponse)
 async def generate_report_form(request: Request, user_id: int, db: Session = Depends(get_db)):
-    if not request.session.get("logged_in") or request.session.get("role") != "admin":
-        return RedirectResponse(url="/login")
+    guard = require_admin_page(request)
+    if guard:
+        return guard
 
     user = db.get(User, user_id)
     if not user:
@@ -1168,8 +1367,9 @@ async def generate_report(
     year: int = Form(...),
     db: Session = Depends(get_db),
 ):
-    if not request.session.get("logged_in") or request.session.get("role") != "admin":
-        return RedirectResponse(url="/login")
+    guard = require_admin_page(request)
+    if guard:
+        return guard
 
     user = db.get(User, user_id)
     if not user:
@@ -1189,30 +1389,45 @@ async def generate_report(
 # --- Staff & Enrollment Routes ---
 
 @app.get("/staff_portal", response_class=HTMLResponse)
-async def staff_portal_get(request: Request):
+async def staff_portal_get(request: Request, db: Session = Depends(get_db)):
     """Serves the staff portal page where users can view their own attendance."""
-    return render_template(request, "staff_portal.html", build_staff_portal_context(None, None))
+    if is_admin_authenticated(request):
+        return RedirectResponse(url="/admin", status_code=303)
+    user = get_staff_session_user(request, db)
+    return render_template(request, "staff_portal.html", build_staff_portal_context(db, user))
 
 @app.post("/staff_portal", response_class=HTMLResponse)
 async def staff_portal_post(request: Request, 
-                            user_id: int = Form(...),
+                            staff_code: str = Form(""),
                             db: Session = Depends(get_db)):
     """
-    Handles the user selection and displays the user's attendance records.
+    Authenticates a staff member using their 6-digit staff code.
     """
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        return render_template(request, "staff_portal.html", build_staff_portal_context(db, None, "Invalid user selection."))
+    if is_admin_authenticated(request):
+        return RedirectResponse(url="/admin", status_code=303)
 
-    return render_template(request, "staff_portal.html", build_staff_portal_context(db, user))
+    code = (staff_code or "").strip()
+    if not code:
+        return render_template(request, "staff_portal.html", build_staff_portal_context(db, None, "Enter your 6-digit staff code."))
+
+    user = db.query(User).filter(User.staff_code == code).first()
+    if not user:
+        clear_staff_session(request)
+        return render_template(request, "staff_portal.html", build_staff_portal_context(db, None, "Invalid staff code. Please try again."))
+
+    set_staff_session(request, user.id)
+    request.state.flash(f"Welcome back, {user.name}.", "success")
+    return RedirectResponse(url="/staff_portal", status_code=303)
 
 
 @app.get("/staff_report/{user_id}", response_class=HTMLResponse)
 async def staff_report(user_id: int, request: Request, month: int | None = None, year: int | None = None, db: Session = Depends(get_db)):
     """Allows a staff user to view a printable monthly report from the staff portal."""
-    user = db.get(User, user_id)
-    if not user:
-        request.state.flash("User not found.", "danger")
+    user, guard = require_staff_page(request, db)
+    if guard:
+        return guard
+    if not user or user.id != user_id:
+        request.state.flash("You can only open your own staff report.", "danger")
         return RedirectResponse(url="/staff_portal", status_code=303)
 
     now = get_now()
@@ -1230,8 +1445,9 @@ async def re_enroll_get(request: Request, db: Session = Depends(get_db)):
     """
     Serves a page for admins to select a user to re-enroll.
     """
-    if not request.session.get("logged_in") or request.session.get("role") != "admin":
-        return RedirectResponse(url="/login")
+    guard = require_admin_page(request)
+    if guard:
+        return guard
 
     users = db.query(User).order_by(User.name).all()
     return render_template(request, "re_enroll.html", {"users": users})
@@ -1241,6 +1457,9 @@ async def re_enroll_post(request: Request, staff_code: str = Form(...), db: Sess
     """
     Handles the user selection for re-enrollment and redirects to the enrollment page.
     """
+    guard = require_admin_page(request)
+    if guard:
+        return guard
     user = db.query(User).filter(User.staff_code == staff_code).first()
     if not user:
         request.state.flash("User not found!", "danger")
@@ -1250,7 +1469,7 @@ async def re_enroll_post(request: Request, staff_code: str = Form(...), db: Sess
 # --- API Endpoints ---
 
 @app.get("/analytics")
-async def analytics_endpoint(db: Session = Depends(get_db)):
+async def analytics_endpoint(request: Request, db: Session = Depends(get_db)):
     """
     Provides a JSON summary of attendance statistics for all users.
     Used by the admin dashboard to populate the main analytics table.
@@ -1317,6 +1536,10 @@ async def add_user(request: Request, name: str = Form(...), email: str = Form(..
     - Generates a unique staff code.
     - Creates the user and redirects to the enrollment page.
     """
+    guard = require_admin_page(request)
+    if guard:
+        return guard
+
     if not name or not email:
         request.state.flash("Name and email are required.", "danger")
         return RedirectResponse(url="/admin", status_code=303)
@@ -1391,6 +1614,9 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
     """
     if settings.APP_ROLE != "LOCAL_KIOSK":
         return JSONResponse({'status': 'error', 'message': 'Capture not available on this service'}, status_code=404)
+    guard = require_admin_api(request)
+    if guard:
+        return guard
     
     user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
     if not os.path.exists(user_dir):
@@ -1423,6 +1649,10 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
 
     if frame is None:
         return JSONResponse({'status': 'error', 'message': 'Camera/Image error'}, status_code=500)
+
+    guard = require_admin_api(request)
+    if guard:
+        return guard
 
     try:
         with model_operation(timeout=0.25, message="Face model is being updated. Please wait a moment."):
@@ -1819,13 +2049,18 @@ async def delete_user(user_id: int, request: Request, background_tasks: Backgrou
     - Deletes attendance logs, face data, and the user record.
     - Retrains the face recognition model after deletion.
     """
-    if not request.session.get("logged_in"):
-        return RedirectResponse(url="/login")
+    guard = require_admin_page(request)
+    if guard:
+        return guard
 
     mutation_started = try_begin_model_mutation()
     if face_engine and not mutation_started:
         request.state.flash("Face model is busy updating. Please try deleting the user again in a moment.", "warning")
         return RedirectResponse(url="/admin", status_code=303)
+
+    guard = require_admin_page(request)
+    if guard:
+        return guard
 
     user = db.get(User, user_id)
     if user:
@@ -1872,8 +2107,9 @@ async def retrain_model(request: Request, background_tasks: BackgroundTasks):
     Initiates a background task to retrain the face recognition model.
     - Requires admin login.
     """
-    if not request.session.get("logged_in"):
-        return RedirectResponse(url="/login")
+    guard = require_admin_page(request)
+    if guard:
+        return guard
         
     if face_engine:
         if queue_model_retrain(background_tasks):
@@ -1886,8 +2122,11 @@ async def retrain_model(request: Request, background_tasks: BackgroundTasks):
     return RedirectResponse(url="/admin", status_code=303)
 
 @app.post("/api/train")
-async def api_train_model(background_tasks: BackgroundTasks):
+async def api_train_model(request: Request, background_tasks: BackgroundTasks):
     """API endpoint to trigger model retraining as a background task."""
+    guard = require_admin_api(request)
+    if guard:
+        return guard
     if face_engine:
         if queue_model_retrain(background_tasks):
             return JSONResponse({'status': 'success', 'message': 'Model training initiated.'})
@@ -1897,6 +2136,7 @@ async def api_train_model(background_tasks: BackgroundTasks):
 
 @app.get("/api/advanced_analytics_data")
 async def advanced_analytics_data(
+    request: Request,
     start_date: str = None,
     end_date: str = None,
     employment_type: str = "All",
@@ -1908,6 +2148,9 @@ async def advanced_analytics_data(
     - Fetches data based on the provided filters (date range, employment type, user).
     - Returns weekly trends, monthly trends, status distribution, peak arrival times, and risk predictions.
     """
+    guard = require_admin_api(request)
+    if guard:
+        return guard
     # Create a cache key based on the query parameters
     cache_key = f"{start_date}-{end_date}-{employment_type}-{user_id}"
 
@@ -1976,10 +2219,15 @@ async def request_early_report(
     db: Session = Depends(get_db),
 ):
     """Handles the request for an early attendance report from the staff portal."""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        request.state.flash("Invalid User ID", "danger")
+    staff_user, guard = require_staff_page(request, db)
+    if guard:
+        return guard
+    if not staff_user:
         return RedirectResponse(url="/staff_portal", status_code=303)
+    if user_id != staff_user.id:
+        request.state.flash("You can only request your own attendance report.", "danger")
+        return RedirectResponse(url="/staff_portal", status_code=303)
+    user = staff_user
 
     if not user.email:
         request.state.flash("No email address on file for this user.", "danger")
@@ -2080,8 +2328,11 @@ async def request_early_report(
     return RedirectResponse(url="/staff_portal", status_code=303)
 
 @app.post("/api/reset_faces/{user_id}")
-async def reset_faces(user_id: int, db: Session = Depends(get_db)):
+async def reset_faces(user_id: int, request: Request, db: Session = Depends(get_db)):
     """Deletes all face data for a user, allowing for re-enrollment."""
+    guard = require_admin_api(request)
+    if guard:
+        return guard
     if face_engine and not try_begin_model_mutation():
         return JSONResponse({'status': 'busy', 'message': 'Face model is already updating.'}, status_code=409)
 
@@ -2100,12 +2351,16 @@ async def reset_faces(user_id: int, db: Session = Depends(get_db)):
             end_model_mutation()
 
 @app.get("/api/recent_logs")
-async def api_recent_logs(db: Session = Depends(get_db)):
+async def api_recent_logs(request: Request, db: Session = Depends(get_db)):
     """
     Provides a JSON list of the 10 most recent attendance logs.
     - Joins with the User table to include the user's name.
     - Used by the main monitoring page to display a live feed of recent activity.
     """
+    guard = require_admin_api(request)
+    if guard:
+        return guard
+
     try:
         logs = db.query(Attendance, User.name).join(User, Attendance.user_id == User.id).order_by(Attendance.timestamp.desc()).limit(10).all()
         

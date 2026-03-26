@@ -90,8 +90,12 @@ Settings load from `.env` (see [config.py](file:///c:/Users/keith/Downloads/proj
 ### 4.2 Database
 
 - `SQLITE_DB_PATH`: Path to local SQLite file (offline store).
-- `DATABASE_URL`: Remote Postgres URL (preferred for direct DB syncing).
+- `DATABASE_URL`: Direct Postgres URL. Required for `ADMIN_DASHBOARD`, and used by `LOCAL_KIOSK` only for remote sync.
 - `SUPABASE_URL`, `SUPABASE_KEY`: Used for Supabase REST fallback in sync.
+
+Notes:
+- `ADMIN_DASHBOARD` now fails fast at startup if `DATABASE_URL` is missing or invalid.
+- `LOCAL_KIOSK` always keeps the primary attendance store on local SQLite for offline safety.
 
 ### 4.3 Redis (Optional)
 

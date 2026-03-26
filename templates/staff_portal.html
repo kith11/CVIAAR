@@ -19,34 +19,40 @@
         color: var(--portal-text);
     }
 
-    .portal-card {
-        background: var(--portal-panel);
+    .hero-card,
+    .portal-card,
+    .summary-box,
+    .report-tools,
+    .empty-card,
+    .pin-card {
         border: 1px solid var(--portal-border);
         border-radius: 16px;
-        box-shadow: none;
+        background: var(--portal-panel);
+    }
+
+    .hero-card {
+        background: var(--portal-muted);
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .portal-card,
+    .pin-card {
         padding: 1.25rem;
     }
 
     .portal-title {
         font-size: 1rem;
         font-weight: 700;
-        letter-spacing: -0.01em;
         margin-bottom: 0.25rem;
     }
 
-    .portal-copy {
+    .portal-copy,
+    .pin-note {
         color: var(--portal-soft);
-        font-size: 0.9rem;
+        font-size: 0.92rem;
         line-height: 1.5;
         margin-bottom: 0;
-    }
-
-    .hero-card {
-        background: var(--portal-muted);
-        border: 1px solid var(--portal-border);
-        border-radius: 18px;
-        padding: 1.5rem;
-        margin-bottom: 1.5rem;
     }
 
     .hero-kicker,
@@ -59,7 +65,7 @@
     }
 
     .meta-value {
-        font-size: 1.4rem;
+        font-size: 1.6rem;
         font-weight: 700;
         letter-spacing: -0.02em;
     }
@@ -71,14 +77,7 @@
     }
 
     .summary-box {
-        border: 1px solid var(--portal-border);
-        border-radius: 14px;
-        background: var(--portal-panel);
         padding: 1rem;
-    }
-
-    .summary-box .meta-value {
-        font-size: 1.8rem;
     }
 
     .action-grid {
@@ -86,40 +85,46 @@
         gap: 0.9rem;
     }
 
-    .status-chip {
+    .status-chip,
+    .status-badge {
         display: inline-flex;
         align-items: center;
         gap: 0.4rem;
         border-radius: 999px;
         padding: 0.3rem 0.7rem;
-        font-size: 0.75rem;
+        font-size: 0.76rem;
         font-weight: 700;
-        border: 1px solid var(--portal-border);
-        background: var(--portal-panel);
-        color: var(--portal-text);
+        border: 1px solid transparent;
     }
 
-    .status-chip.ready {
+    .status-chip.ready,
+    .status-good {
         background: #edf7f3;
         color: var(--portal-green);
         border-color: #cfe3db;
     }
 
-    .status-chip.waiting {
+    .status-chip.waiting,
+    .status-warn {
         background: #fbf6eb;
         color: var(--portal-amber);
         border-color: #e8d6b2;
     }
 
-    .status-chip.off {
+    .status-chip.off,
+    .status-bad {
         background: #fbefef;
         color: var(--portal-red);
         border-color: #e6c5c5;
     }
 
+    .status-neutral {
+        color: var(--portal-blue);
+        background: #eef5f8;
+        border-color: #cedce4;
+    }
+
     .report-tools {
-        border: 1px solid var(--portal-border);
-        border-radius: 14px;
         background: var(--portal-muted);
         padding: 1rem;
     }
@@ -145,40 +150,6 @@
 
     .history-table tbody tr:hover {
         background: #fbfbf9;
-    }
-
-    .status-badge {
-        display: inline-flex;
-        align-items: center;
-        border-radius: 999px;
-        padding: 0.28rem 0.7rem;
-        font-size: 0.78rem;
-        font-weight: 700;
-        border: 1px solid transparent;
-    }
-
-    .status-good {
-        color: var(--portal-green);
-        background: #edf7f3;
-        border-color: #cfe3db;
-    }
-
-    .status-warn {
-        color: var(--portal-amber);
-        background: #fbf6eb;
-        border-color: #e8d6b2;
-    }
-
-    .status-bad {
-        color: var(--portal-red);
-        background: #fbefef;
-        border-color: #e6c5c5;
-    }
-
-    .status-neutral {
-        color: var(--portal-blue);
-        background: #eef5f8;
-        border-color: #cedce4;
     }
 
     .portal-btn {
@@ -209,10 +180,20 @@
         color: var(--portal-text);
     }
 
-    .empty-card {
-        border: 1px dashed var(--portal-border);
-        border-radius: 16px;
+    .pin-input {
+        font-size: 1.35rem;
+        letter-spacing: 0.35em;
+        text-align: center;
+        font-weight: 700;
+    }
+
+    .pin-card {
+        max-width: 420px;
+        margin: 0 auto;
         background: var(--portal-muted);
+    }
+
+    .empty-card {
         padding: 3rem 1.5rem;
         text-align: center;
         color: var(--portal-soft);
@@ -228,33 +209,54 @@
 <div class="staff-shell">
     <div class="hero-card">
         <div class="hero-kicker mb-2">Staff Portal</div>
-        <h1 class="section-title mb-2">View your attendance and send your report</h1>
-        <p class="section-desc mb-0">Choose your name to review recent records, preview your monthly report, or send it to your email.</p>
+        <h1 class="section-title mb-2">View your attendance and report securely</h1>
+        <p class="section-desc mb-0">Use your 6-digit staff code to open your own attendance history, print your monthly report, or send it to your saved email address.</p>
     </div>
 
+    {% if not user %}
+    <div class="pin-card">
+        <div class="portal-title">Enter Staff Code</div>
+        <p class="pin-note mb-4">This portal now requires your own staff PIN before any records can be viewed.</p>
+        <form method="POST" action="/staff_portal">
+            <div class="mb-3">
+                <label class="form-label small fw-bold">6-Digit Staff Code</label>
+                <input
+                    type="password"
+                    name="staff_code"
+                    class="form-control pin-input"
+                    inputmode="numeric"
+                    pattern="[0-9]{6}"
+                    maxlength="6"
+                    autocomplete="one-time-code"
+                    placeholder="000000"
+                    required
+                >
+            </div>
+            <button type="submit" class="btn portal-btn portal-btn-primary w-100">Open My Attendance</button>
+        </form>
+        {% if error %}
+        <div class="small text-danger mt-3">{{ error }}</div>
+        {% endif %}
+    </div>
+    {% else %}
     <div class="row g-4">
         <div class="col-lg-4">
             <div class="portal-card mb-4">
-                <div class="portal-title">Find Your Record</div>
-                <p class="portal-copy mb-4">Select your name, then the portal will load your recent attendance history and report tools.</p>
-                <form method="POST">
-                    <div class="mb-3">
-                        <label class="form-label small fw-bold">Name</label>
-                        <select name="user_id" class="form-select" id="userSelect" data-selected="{{ user.id if user else '' }}" required>
-                            <option value="" disabled selected>Loading names...</option>
-                        </select>
+                <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                    <div>
+                        <div class="hero-kicker mb-2">Signed In</div>
+                        <h2 class="h4 fw-bold mb-1">{{ user.name }}</h2>
+                        <p class="portal-copy mb-0">{{ user.employment_type }} | Staff ID: {{ user.staff_code or 'N/A' }}</p>
                     </div>
-                    <button type="submit" class="btn portal-btn portal-btn-primary w-100">Open My Attendance</button>
-                </form>
-                {% if error %}
-                <div class="small text-danger mt-3">{{ error }}</div>
-                {% endif %}
+                    <a href="/staff_logout" class="btn portal-btn portal-btn-secondary">
+                        <i class="bi bi-box-arrow-right me-1"></i>Sign Out
+                    </a>
+                </div>
             </div>
 
-            {% if user %}
             <div class="portal-card">
                 <div class="portal-title">Report Tools</div>
-                <p class="portal-copy mb-3">Choose a month, preview your printable report, or send the same report to your email.</p>
+                <p class="portal-copy mb-3">Choose a month, preview your printable report, or send the same report to your saved email.</p>
 
                 <div class="report-tools mb-3">
                     <div class="mb-3">
@@ -285,7 +287,7 @@
                         {% elif report_email.cooldown_remaining > 0 %}
                         Another report can be sent after the cooldown finishes.
                         {% else %}
-                        The report will be sent to the email address shown above.
+                        The report will be sent only to your saved email address.
                         {% endif %}
                     </div>
                 </div>
@@ -309,38 +311,19 @@
                     </form>
                 </div>
             </div>
-            {% endif %}
         </div>
 
         <div class="col-lg-8">
-            {% if user %}
-            <div class="portal-card mb-4">
-                <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
-                    <div>
-                        <div class="hero-kicker mb-2">Staff Details</div>
-                        <h2 class="h4 fw-bold mb-1">{{ user.name }}</h2>
-                        <p class="portal-copy mb-0">{{ user.employment_type }} | Staff ID: {{ user.staff_code or 'N/A' }}</p>
-                    </div>
-                    <div class="small text-muted">
-                        {% if summary.latest_log %}
-                        Last activity: {{ summary.latest_log.timestamp.strftime('%Y-%m-%d %I:%M %p') }}
-                        {% else %}
-                        No attendance records yet
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-
             <div class="summary-grid mb-4">
                 <div class="summary-box">
                     <div class="meta-label">On-Time Check-Ins</div>
                     <div class="meta-value text-success">{{ summary.on_time_count }}</div>
-                    <div class="portal-copy">Recorded on-time arrivals in the recent history list.</div>
+                    <div class="portal-copy">Recorded on-time arrivals in your recent history list.</div>
                 </div>
                 <div class="summary-box">
                     <div class="meta-label">Late Check-Ins</div>
                     <div class="meta-value text-warning">{{ summary.late_count }}</div>
-                    <div class="portal-copy">Late arrivals found in the recent history list.</div>
+                    <div class="portal-copy">Late arrivals found in your recent history list.</div>
                 </div>
                 <div class="summary-box">
                     <div class="meta-label">Absent Sessions</div>
@@ -386,47 +369,13 @@
                     </table>
                 </div>
             </div>
-            {% else %}
-            <div class="empty-card">
-                <i class="bi bi-person-lines-fill h1 d-block mb-3"></i>
-                <p class="mb-2 fw-bold text-dark">No staff record selected yet</p>
-                <p class="mb-0">Choose your name on the left to view your attendance history and report options.</p>
-            </div>
-            {% endif %}
         </div>
     </div>
+    {% endif %}
 </div>
 
 <script>
-    document.addEventListener('DOMContentLoaded', async function() {
-        const userSelect = document.getElementById('userSelect');
-        const selectedUserId = userSelect?.dataset.selected || '';
-        try {
-            const response = await fetch('/api/users');
-            if (!response.ok) throw new Error('Failed to fetch users');
-            const users = await response.json();
-
-            userSelect.innerHTML = '<option value="" disabled selected>Choose your name</option>';
-            if (users.length === 0) {
-                userSelect.innerHTML = '<option value="" disabled>No users found</option>';
-            } else {
-                users
-                    .sort((a, b) => a.name.localeCompare(b.name))
-                    .forEach(user => {
-                        const option = document.createElement('option');
-                        option.value = user.id;
-                        option.textContent = user.name;
-                        if (selectedUserId && String(user.id) === String(selectedUserId)) {
-                            option.selected = true;
-                        }
-                        userSelect.appendChild(option);
-                    });
-            }
-        } catch (err) {
-            console.error('Error loading users:', err);
-            userSelect.innerHTML = '<option value="" disabled>Error loading users</option>';
-        }
-
+    document.addEventListener('DOMContentLoaded', function() {
         const reportPeriod = document.getElementById('reportPeriod');
         if (!reportPeriod) {
             return;

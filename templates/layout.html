@@ -447,7 +447,7 @@
                 </a>
             </nav>
             <div class="mt-auto">
-                <a class="nav-link" href="/logout">
+                <a class="nav-link" href="{{ '/staff_logout' if request.session.get('role') == 'staff' else '/logout' }}">
                     <i class="bi bi-box-arrow-right"></i>
                     Sign Out
                 </a>
