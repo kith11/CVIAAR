@@ -19,6 +19,7 @@ from .models import Attendance, Base, User, ensure_application_schema
 import uuid
 
 logger = logging.getLogger(__name__)
+SYNC_BATCH_SIZE = 100
 
 class SyncEngine:
     """
@@ -222,43 +223,78 @@ class SyncEngine:
             local_session = self.Session()
             try:
                 pending = local_session.query(Attendance).filter(Attendance.synced == 0).all()
-                if not pending: return
+                if not pending:
+                    return
                 
                 logger.info(f"Found {len(pending)} pending records to sync.")
-                
-                # Choose the best sync method available
-                sync_success = False
-                if self.RemoteSession:
-                    sync_success = self._sync_direct_postgres(pending)
-                else:
-                    batch = []
-                    for r in pending:
-                        batch.append({
-                            'sync_key': r.sync_key,
-                            'user_id': r.user_id,
-                            'timestamp': r.timestamp.isoformat(),
-                            'status': r.status,
-                            'session': r.session,
-                            'event_type': r.event_type,
-                            'auto_generated': r.auto_generated,
-                            'notes': r.notes,
-                            'device_id': r.device_id,
-                            'synced': 1,
-                            'synced_at': datetime.now().isoformat()
-                        })
-                    sync_success = self._upsert_supabase(batch)
-                
-                if sync_success:
-                    for r in pending:
-                        r.synced = 1
-                        r.synced_at = datetime.now()
+
+                batches = [
+                    pending[index:index + SYNC_BATCH_SIZE]
+                    for index in range(0, len(pending), SYNC_BATCH_SIZE)
+                ]
+                synced_count = 0
+
+                for batch_index, batch_records in enumerate(batches, start=1):
+                    sync_success = False
+                    if self.RemoteSession:
+                        sync_success = self._sync_direct_postgres(batch_records)
+                    else:
+                        payload = []
+                        for record in batch_records:
+                            payload.append({
+                                'sync_key': record.sync_key,
+                                'user_id': record.user_id,
+                                'timestamp': record.timestamp.isoformat(),
+                                'status': record.status,
+                                'session': record.session,
+                                'event_type': record.event_type,
+                                'auto_generated': record.auto_generated,
+                                'notes': record.notes,
+                                'device_id': record.device_id,
+                                'synced': 1,
+                                'synced_at': datetime.now().isoformat()
+                            })
+                        sync_success = self._upsert_supabase(payload)
+
+                    if not sync_success:
+                        failed_count = len(batch_records)
+                        self.sync_stats['total_failed'] += failed_count
+                        self.sync_stats['consecutive_failures'] += 1
+                        logger.error(
+                            "Failed to sync batch %s/%s (%s records).",
+                            batch_index,
+                            len(batches),
+                            failed_count,
+                        )
+                        break
+
+                    synced_at = datetime.now()
+                    synced_ids = [record.id for record in batch_records]
+                    (
+                        local_session.query(Attendance)
+                        .filter(Attendance.id.in_(synced_ids))
+                        .update(
+                            {
+                                Attendance.synced: 1,
+                                Attendance.synced_at: synced_at,
+                            },
+                            synchronize_session=False,
+                        )
+                    )
                     local_session.commit()
-                    self.sync_stats['total_synced'] += len(pending)
-                    self.sync_stats['last_sync_time'] = datetime.now()
-                    self.sync_stats['consecutive_failures'] = 0 # Reset on success
-                else:
-                    self.sync_stats['total_failed'] += len(pending)
-                    self.sync_stats['consecutive_failures'] += 1
+                    synced_count += len(batch_records)
+                    self.sync_stats['total_synced'] += len(batch_records)
+                    self.sync_stats['last_sync_time'] = synced_at
+                    self.sync_stats['consecutive_failures'] = 0
+                    logger.info(
+                        "Synced batch %s/%s (%s records).",
+                        batch_index,
+                        len(batches),
+                        len(batch_records),
+                    )
+
+                if synced_count:
+                    logger.info("Completed sync for %s records.", synced_count)
             except Exception as e:
                 self.sync_stats['total_failed'] += 1
                 self.sync_stats['last_error'] = str(e)
