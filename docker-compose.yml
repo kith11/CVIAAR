@@ -48,6 +48,7 @@ services:
     environment:
       - PORT=10000
       - TZ=Asia/Manila
+      - INSTANCE_LOCK_ENABLED=false
       # Override DB and Redis URLs to use the local Docker containers if desired
       # - DATABASE_URL=postgresql://admin:password123@db:5432/cviaar
       # - REDIS_URL=redis://redis:6379/0

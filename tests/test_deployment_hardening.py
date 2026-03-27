@@ -103,9 +103,9 @@ class DeploymentHardeningTests(unittest.TestCase):
 
         page = self.client.get("/staff_portal")
         self.assertEqual(page.status_code, 200)
-        self.assertIn("Enter Staff Code", page.text)
+        self.assertIn("Choose Your Name", page.text)
 
-        login_response = self.client.post("/staff_portal", data={"staff_code": "111111"}, follow_redirects=False)
+        login_response = self.client.post("/staff_portal", data={"user_id": alice.id}, follow_redirects=False)
         self.assertEqual(login_response.status_code, 303)
         self.assertEqual(login_response.headers["location"], "/staff_portal")
 
@@ -125,7 +125,7 @@ class DeploymentHardeningTests(unittest.TestCase):
         alice = self.create_user("Alice Example", "111111", email="alice@gmail.com")
         bob = self.create_user("Bob Example", "222222", email="bob@gmail.com")
 
-        self.client.post("/staff_portal", data={"staff_code": "111111"}, follow_redirects=True)
+        self.client.post("/staff_portal", data={"user_id": alice.id}, follow_redirects=True)
         response = self.client.post(
             "/request_early_report",
             data={"user_id": bob.id, "month": 3, "year": 2026},
@@ -143,7 +143,7 @@ class DeploymentHardeningTests(unittest.TestCase):
 
         response = self.client.get("/staff_portal")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Enter Staff Code", response.text)
+        self.assertIn("Choose Your Name", response.text)
 
     def test_audit_logs_show_recorded_admin_actions(self):
         login = self.client.post("/login", data={"password": "unit-test-admin-password"}, follow_redirects=True)

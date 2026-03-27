@@ -239,10 +239,16 @@ else:
 # To prevent multiple instances of the application from running concurrently,
 # we use a PID file. If a PID file already exists, we check if the process is still running.
 PID_FILE = os.path.join(basedir, "data", "app.pid")
+INSTANCE_LOCK_ENABLED = os.getenv("INSTANCE_LOCK_ENABLED", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 def manage_instance_lifecycle():
     # Only manage PID if we are in the main worker process, not the reloader or a CLI script
-    if os.environ.get("UVICORN_INTERACTIVE") == "true" or \
+    if not INSTANCE_LOCK_ENABLED or \
+       os.environ.get("UVICORN_INTERACTIVE") == "true" or \
        os.environ.get("UVICORN_RELOADER_PROCESS") == "true" or \
        os.environ.get("APP_ROLE") == "ADMIN_DASHBOARD":
         return
@@ -728,7 +734,16 @@ def get_report_email_state(user: User) -> dict[str, Any]:
 
 
 def build_staff_portal_context(db: Session, user: User | None = None, error: str | None = None) -> dict[str, Any]:
-    context: dict[str, Any] = {"user": user, "logs": [], "error": error}
+    staff_users = []
+    if db is not None:
+        staff_users = (
+            db.query(User.id, User.name, User.staff_code)
+            .filter(User.staff_code.isnot(None))
+            .order_by(User.name.asc())
+            .all()
+        )
+
+    context: dict[str, Any] = {"user": user, "logs": [], "error": error, "staff_users": staff_users}
     if not user:
         return context
 
@@ -1507,19 +1522,18 @@ async def staff_portal_get(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/staff_portal", response_class=HTMLResponse)
 async def staff_portal_post(request: Request, 
-                            staff_code: str = Form(""),
+                            user_id: int = Form(0),
                             db: Session = Depends(get_db)):
     """
-    Authenticates a staff member using their 6-digit staff code.
+    Authenticates a staff member using the staff picker.
     """
-    code = (staff_code or "").strip()
-    if not code:
-        return render_template(request, "staff_portal.html", build_staff_portal_context(db, None, "Enter your 6-digit staff code."))
+    if not user_id:
+        return render_template(request, "staff_portal.html", build_staff_portal_context(db, None, "Choose your name from the list first."))
 
-    user = db.query(User).filter(User.staff_code == code).first()
+    user = db.query(User).filter(User.id == int(user_id), User.staff_code.isnot(None)).first()
     if not user:
         clear_staff_session(request)
-        return render_template(request, "staff_portal.html", build_staff_portal_context(db, None, "Invalid staff code. Please try again."))
+        return render_template(request, "staff_portal.html", build_staff_portal_context(db, None, "That staff account could not be opened. Please try again."))
 
     set_staff_session(request, user.id)
     request.state.flash(f"Welcome back, {user.name}.", "success")

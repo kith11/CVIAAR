@@ -180,15 +180,26 @@
         color: var(--portal-text);
     }
 
-    .pin-input {
-        font-size: 1.35rem;
-        letter-spacing: 0.35em;
-        text-align: center;
+    .staff-picker {
+        font-size: 1rem;
+        min-height: 52px;
+        font-weight: 600;
+    }
+
+    .picker-hint {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        border-radius: 999px;
+        padding: 0.35rem 0.75rem;
+        background: #eef5f8;
+        color: var(--portal-blue);
+        font-size: 0.78rem;
         font-weight: 700;
     }
 
     .pin-card {
-        max-width: 420px;
+        max-width: 520px;
         margin: 0 auto;
         background: var(--portal-muted);
     }
@@ -210,27 +221,26 @@
     <div class="hero-card">
         <div class="hero-kicker mb-2">Staff Portal</div>
         <h1 class="section-title mb-2">View your attendance and report securely</h1>
-        <p class="section-desc mb-0">Use your 6-digit staff code to open your own attendance history, print your monthly report, or send it to your saved email address.</p>
+        <p class="section-desc mb-0">Choose your name from the list to open your attendance history, print your monthly report, or send it to your saved email address.</p>
     </div>
 
     {% if not user %}
     <div class="pin-card">
-        <div class="portal-title">Enter Staff Code</div>
-        <p class="pin-note mb-4">This portal now requires your own staff PIN before any records can be viewed.</p>
+        <div class="portal-title">Choose Your Name</div>
+        <p class="pin-note mb-3">This portal is mouse-friendly now. Pick your name from the list below to open your own attendance page.</p>
+        <div class="picker-hint mb-4">
+            <i class="bi bi-cursor"></i>
+            Click to open the name list
+        </div>
         <form method="POST" action="/staff_portal">
             <div class="mb-3">
-                <label class="form-label small fw-bold">6-Digit Staff Code</label>
-                <input
-                    type="password"
-                    name="staff_code"
-                    class="form-control pin-input"
-                    inputmode="numeric"
-                    pattern="[0-9]{6}"
-                    maxlength="6"
-                    autocomplete="one-time-code"
-                    placeholder="000000"
-                    required
-                >
+                <label class="form-label small fw-bold">Staff Name</label>
+                <select name="user_id" class="form-select staff-picker" required>
+                    <option value="" selected disabled>Select your name</option>
+                    {% for staff in staff_users %}
+                    <option value="{{ staff.id }}">{{ staff.name }}</option>
+                    {% endfor %}
+                </select>
             </div>
             <button type="submit" class="btn portal-btn portal-btn-primary w-100">Open My Attendance</button>
         </form>
