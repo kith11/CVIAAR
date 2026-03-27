@@ -72,7 +72,7 @@ except ImportError:
     local_redis = None
 
 from config import settings
-from modules.models import Base, User, Attendance, AttendanceEdit, AuditEvent, ExcuseNote, ensure_attendance_schema
+from modules.models import Base, User, Attendance, AttendanceEdit, AuditEvent, ExcuseNote, ensure_application_schema
 # Heavy modules moved into conditional blocks below
 # from modules.camera import Camera
 # from modules.face_engine import FaceEngine
@@ -352,7 +352,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # Create tables on startup
 try:
     Base.metadata.create_all(bind=engine)
-    ensure_attendance_schema(engine)
+    ensure_application_schema(engine)
     logging.info("Database tables initialized successfully.")
 except Exception as e:
     logging.error(f"Error initializing database tables: {e}")

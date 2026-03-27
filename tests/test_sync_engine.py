@@ -1,9 +1,12 @@
 import os
+import sqlite3
 import tempfile
 import unittest
 from datetime import date, datetime
 
-from modules.models import Attendance, Base, User
+from sqlalchemy import create_engine
+
+from modules.models import Attendance, Base, User, ensure_application_schema
 from modules.sync_engine import SyncEngine
 
 
@@ -125,6 +128,46 @@ class SyncEngineTests(unittest.TestCase):
 
         self.assertIn("total_synced", stats)
         self.assertNotIn("thermal", stats)
+
+    def test_schema_repair_adds_missing_user_columns(self):
+        legacy_path = os.path.join(self.tempdir.name, "legacy.sqlite3")
+        connection = sqlite3.connect(legacy_path)
+        try:
+            connection.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL)")
+            connection.execute(
+                "CREATE TABLE attendance_logs ("
+                "id INTEGER PRIMARY KEY, "
+                "user_id INTEGER NOT NULL, "
+                "timestamp DATETIME, "
+                "status VARCHAR(20) NOT NULL, "
+                "notes VARCHAR(200), "
+                "device_id VARCHAR(50))"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        ensure_application_schema(create_engine(f"sqlite:///{legacy_path}"))
+
+        verify = sqlite3.connect(legacy_path)
+        try:
+            user_columns = {
+                row[1]
+                for row in verify.execute("PRAGMA table_info(users)").fetchall()
+            }
+            attendance_columns = {
+                row[1]
+                for row in verify.execute("PRAGMA table_info(attendance_logs)").fetchall()
+            }
+        finally:
+            verify.close()
+
+        self.assertIn("email", user_columns)
+        self.assertIn("staff_code", user_columns)
+        self.assertIn("role", user_columns)
+        self.assertIn("sync_key", attendance_columns)
+        self.assertIn("synced", attendance_columns)
+        self.assertIn("synced_at", attendance_columns)
 
 
 if __name__ == "__main__":

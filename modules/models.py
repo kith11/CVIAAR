@@ -75,12 +75,18 @@ def ensure_attendance_schema(engine) -> None:
         return
 
     statements = []
+    if "sync_key" not in existing_columns:
+        statements.append("ALTER TABLE attendance_logs ADD COLUMN sync_key VARCHAR(36)")
     if "session" not in existing_columns:
         statements.append("ALTER TABLE attendance_logs ADD COLUMN session VARCHAR(2)")
     if "event_type" not in existing_columns:
         statements.append("ALTER TABLE attendance_logs ADD COLUMN event_type VARCHAR(20)")
     if "auto_generated" not in existing_columns:
         statements.append("ALTER TABLE attendance_logs ADD COLUMN auto_generated INTEGER DEFAULT 0")
+    if "synced" not in existing_columns:
+        statements.append("ALTER TABLE attendance_logs ADD COLUMN synced INTEGER DEFAULT 0")
+    if "synced_at" not in existing_columns:
+        statements.append("ALTER TABLE attendance_logs ADD COLUMN synced_at TIMESTAMP")
 
     if not statements:
         return
@@ -88,6 +94,46 @@ def ensure_attendance_schema(engine) -> None:
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
+
+
+def ensure_user_schema(engine) -> None:
+    """Adds newer user columns to existing databases when needed."""
+    inspector = inspect(engine)
+    try:
+        existing_columns = {column["name"] for column in inspector.get_columns("users")}
+    except Exception:
+        return
+
+    statements = []
+    if "email" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN email VARCHAR(120)")
+    if "staff_code" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN staff_code VARCHAR(6)")
+    if "created_at" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN created_at TIMESTAMP")
+    if "schedule_start" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN schedule_start VARCHAR(5) DEFAULT '06:00'")
+    if "schedule_end" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN schedule_end VARCHAR(5) DEFAULT '19:00'")
+    if "employment_type" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN employment_type VARCHAR(20) DEFAULT 'Full-time'")
+    if "role" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'staff'")
+    if "last_report_sent" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN last_report_sent TIMESTAMP")
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+def ensure_application_schema(engine) -> None:
+    """Repairs legacy tables so older databases can run against the current app."""
+    ensure_user_schema(engine)
+    ensure_attendance_schema(engine)
 
 
 class AttendanceEdit(Base):

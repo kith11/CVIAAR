@@ -15,7 +15,7 @@ from .attendance_rules import (
     normalize_session,
     session_absent_status,
 )
-from .models import Attendance, Base, User, ensure_attendance_schema
+from .models import Attendance, Base, User, ensure_application_schema
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class SyncEngine:
         connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
         self.engine = create_engine(database_url, connect_args=connect_args)
         Base.metadata.create_all(self.engine)
-        ensure_attendance_schema(self.engine)
+        ensure_application_schema(self.engine)
         self.Session = sessionmaker(bind=self.engine)
         
         # Database setup for the remote store (if provided)
@@ -66,7 +66,7 @@ class SyncEngine:
                 remote_connect_args = {"check_same_thread": False} if self.remote_db_url.startswith("sqlite") else {}
                 self.remote_engine = create_engine(self.remote_db_url, connect_args=remote_connect_args)
                 Base.metadata.create_all(self.remote_engine)
-                ensure_attendance_schema(self.remote_engine)
+                ensure_application_schema(self.remote_engine)
                 self.RemoteSession = sessionmaker(bind=self.remote_engine)
                 logger.info("Remote database connection initialized for syncing.")
             except Exception as e:
