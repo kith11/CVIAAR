@@ -78,6 +78,56 @@
                         </div>
                     </div>
                 </div>
+
+                <div id="login-pin-panel" class="login-pin-panel d-none">
+                    <div class="login-pin-card shadow-lg">
+                        <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+                            <div>
+                                <div class="text-uppercase fw-bold small text-muted">Employee Login</div>
+                                <h5 class="fw-bold mb-1">Enter Employee ID</h5>
+                                <p class="text-muted small mb-0">Use the keypad below. No keyboard is needed.</p>
+                            </div>
+                            <button type="button" id="btn-close-pin-panel" class="btn btn-sm btn-outline-secondary rounded-circle px-2" aria-label="Close login keypad">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </div>
+
+                        <div class="login-pin-display mb-3">
+                            <div class="small text-uppercase text-muted fw-bold mb-2">Employee ID</div>
+                            <div id="login-pin-value" class="login-pin-value">------</div>
+                        </div>
+
+                        <div id="login-pin-feedback" class="login-pin-feedback login-pin-feedback-neutral mb-3">
+                            Enter the 6-digit employee ID to continue.
+                        </div>
+
+                        <div id="login-user-preview" class="login-user-preview d-none mb-3">
+                            <div class="small text-uppercase text-muted fw-bold">Matched Employee</div>
+                            <div id="login-user-name" class="login-user-name">-</div>
+                            <div class="small text-muted">Press LOG IN to start face recognition.</div>
+                        </div>
+
+                        <div class="login-keypad mb-3">
+                            {% for digit in ["1", "2", "3", "4", "5", "6", "7", "8", "9"] %}
+                            <button type="button" class="btn btn-light login-key" data-keypad-digit="{{ digit }}">{{ digit }}</button>
+                            {% endfor %}
+                            <button type="button" class="btn btn-outline-secondary login-key login-key-action" id="btn-clear-pin">Clear</button>
+                            <button type="button" class="btn btn-light login-key" data-keypad-digit="0">0</button>
+                            <button type="button" class="btn btn-outline-secondary login-key login-key-action" id="btn-backspace-pin">
+                                <i class="bi bi-backspace"></i>
+                            </button>
+                        </div>
+
+                        <div class="d-grid gap-2">
+                            <button type="button" id="btn-start-pin-login" class="btn btn-success py-3 fw-bold" disabled>
+                                <i class="bi bi-person-check-fill me-2"></i>LOG IN
+                            </button>
+                            <button type="button" id="btn-cancel-pin-login" class="btn btn-outline-secondary py-2 fw-bold">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -177,6 +227,97 @@
         }
         .animate-blink-success { animation: blink-success 0.8s ease-out forwards; }
 
+    .login-pin-panel {
+        position: absolute;
+        inset: 0;
+        z-index: 5;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        background: linear-gradient(180deg, rgba(4, 15, 28, 0.78), rgba(5, 18, 28, 0.92));
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+    }
+
+    .login-pin-card {
+        width: min(420px, 100%);
+        border-radius: 28px;
+        background: rgba(255, 255, 255, 0.96);
+        padding: 1.5rem;
+        border: 1px solid rgba(21, 101, 192, 0.12);
+    }
+
+    .login-pin-display {
+        border-radius: 18px;
+        border: 1px solid rgba(13, 110, 253, 0.12);
+        background: #f8fbff;
+        padding: 1rem 1.1rem;
+    }
+
+    .login-pin-value {
+        font-size: 1.8rem;
+        font-weight: 700;
+        letter-spacing: 0.35em;
+        color: #0f172a;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .login-pin-feedback {
+        border-radius: 16px;
+        padding: 0.8rem 1rem;
+        font-size: 0.92rem;
+        font-weight: 600;
+    }
+
+    .login-pin-feedback-neutral {
+        background: rgba(13, 110, 253, 0.08);
+        color: #0b5ed7;
+    }
+
+    .login-pin-feedback-error {
+        background: rgba(220, 53, 69, 0.12);
+        color: #b02a37;
+    }
+
+    .login-pin-feedback-success {
+        background: rgba(25, 135, 84, 0.12);
+        color: #146c43;
+    }
+
+    .login-user-preview {
+        border-radius: 18px;
+        padding: 1rem 1.1rem;
+        background: linear-gradient(135deg, rgba(25, 135, 84, 0.12), rgba(13, 110, 253, 0.08));
+        border: 1px solid rgba(25, 135, 84, 0.15);
+    }
+
+    .login-user-name {
+        font-size: 1.15rem;
+        font-weight: 700;
+        color: #14532d;
+        margin: 0.2rem 0;
+    }
+
+    .login-keypad {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.75rem;
+    }
+
+    .login-key {
+        min-height: 64px;
+        border-radius: 18px;
+        font-size: 1.25rem;
+        font-weight: 700;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+    }
+
+    .login-key.login-key-action {
+        font-size: 0.95rem;
+        font-weight: 600;
+    }
+
     /* Standby overlay with floating names */
     .standby-overlay {
         position: fixed;
@@ -244,11 +385,37 @@
         .standby-name {
             font-size: 0.95rem;
         }
+        .login-pin-panel {
+            padding: 1rem;
+        }
+        .login-pin-card {
+            padding: 1.15rem;
+            border-radius: 22px;
+        }
+        .login-pin-value {
+            font-size: 1.5rem;
+            letter-spacing: 0.28em;
+        }
+        .login-key {
+            min-height: 58px;
+        }
     }
 </style>
 
 <script>
     document.addEventListener('DOMContentLoaded', () => {
+        const kioskUsers = [
+            {% for user in users if user.staff_code %}
+            {
+                id: {{ user.id }},
+                name: {{ user.name|tojson }},
+                staff_code: {{ user.staff_code|tojson }}
+            },
+            {% endfor %}
+        ];
+        const staffDirectory = new Map(kioskUsers.map(user => [String(user.staff_code), user]));
+        const STAFF_CODE_LENGTH = 6;
+
         // Clock Logic
         function updateClock() {
             const now = new Date();
@@ -346,9 +513,147 @@
         const cameraControls = document.getElementById('camera-controls');
         const activeControls = document.getElementById('active-controls');
         const statusSpinner = document.getElementById('status-spinner');
+        const loginPinPanel = document.getElementById('login-pin-panel');
+        const loginPinValueEl = document.getElementById('login-pin-value');
+        const loginPinFeedback = document.getElementById('login-pin-feedback');
+        const loginUserPreview = document.getElementById('login-user-preview');
+        const loginUserName = document.getElementById('login-user-name');
+        const btnStartPinLogin = document.getElementById('btn-start-pin-login');
+        const btnClosePinPanel = document.getElementById('btn-close-pin-panel');
+        const btnCancelPinLogin = document.getElementById('btn-cancel-pin-login');
+        const btnClearPin = document.getElementById('btn-clear-pin');
+        const btnBackspacePin = document.getElementById('btn-backspace-pin');
+        const keypadDigitButtons = Array.from(document.querySelectorAll('[data-keypad-digit]'));
 
         let sessionTimeoutId = null;
         const SESSION_TIMEOUT_MS = 30000; // 30 seconds limit
+        const PIN_AUTO_START_DELAY_MS = 1500;
+        let loginPinValue = '';
+        let pendingLoginUser = null;
+        let expectedLoginUserId = null;
+        let expectedLoginUserName = null;
+        let pinAutoStartTimeoutId = null;
+
+        function setPinFeedback(message, tone = 'neutral') {
+            loginPinFeedback.textContent = message;
+            loginPinFeedback.className = `login-pin-feedback mb-3 login-pin-feedback-${tone}`;
+        }
+
+        function renderPinValue() {
+            const paddedValue = loginPinValue.padEnd(STAFF_CODE_LENGTH, '-');
+            loginPinValueEl.textContent = paddedValue;
+        }
+
+        function clearLoginSelection() {
+            if (pinAutoStartTimeoutId) {
+                clearTimeout(pinAutoStartTimeoutId);
+                pinAutoStartTimeoutId = null;
+            }
+            loginPinValue = '';
+            pendingLoginUser = null;
+            expectedLoginUserId = null;
+            expectedLoginUserName = null;
+            renderPinValue();
+            loginUserPreview.classList.add('d-none');
+            loginUserName.textContent = '-';
+            btnStartPinLogin.disabled = true;
+            setPinFeedback('Enter the 6-digit employee ID to continue.', 'neutral');
+        }
+
+        function evaluateLoginPin() {
+            renderPinValue();
+            pendingLoginUser = null;
+            loginUserPreview.classList.add('d-none');
+            loginUserName.textContent = '-';
+            btnStartPinLogin.disabled = true;
+
+            if (!staffDirectory.size) {
+                setPinFeedback('No employee IDs are configured yet. Please contact the administrator.', 'error');
+                return;
+            }
+
+            if (!loginPinValue.length) {
+                setPinFeedback('Enter the 6-digit employee ID to continue.', 'neutral');
+                return;
+            }
+
+            if (loginPinValue.length < STAFF_CODE_LENGTH) {
+                setPinFeedback(`Employee ID must be ${STAFF_CODE_LENGTH} digits.`, 'neutral');
+                return;
+            }
+
+            const matchedUser = staffDirectory.get(loginPinValue);
+            if (!matchedUser) {
+                setPinFeedback('Employee ID not found. Please check the code and try again.', 'error');
+                return;
+            }
+
+            pendingLoginUser = matchedUser;
+            loginUserPreview.classList.remove('d-none');
+            loginUserName.textContent = matchedUser.name;
+            btnStartPinLogin.disabled = false;
+            setPinFeedback('Employee ID matched. Starting face recognition soon. Tap Cancel to stop.', 'success');
+
+            if (pinAutoStartTimeoutId) {
+                clearTimeout(pinAutoStartTimeoutId);
+            }
+            pinAutoStartTimeoutId = setTimeout(() => {
+                pinAutoStartTimeoutId = null;
+                beginPinnedLogin();
+            }, PIN_AUTO_START_DELAY_MS);
+        }
+
+        function openLoginPinPanel() {
+            clearLoginSelection();
+            evaluateLoginPin();
+            loginPinPanel.classList.remove('d-none');
+            statusSpinner.classList.add('d-none');
+            statusMsg.textContent = 'Enter employee ID to begin login.';
+            statusOverlay.style.background = 'rgba(0,0,0,0.7)';
+        }
+
+        function cancelPinnedLogin() {
+            closeLoginPinPanel({ reset: true, restoreStatus: true });
+        }
+
+        function closeLoginPinPanel({ reset = true, restoreStatus = true } = {}) {
+            loginPinPanel.classList.add('d-none');
+            if (reset) {
+                clearLoginSelection();
+            }
+            if (restoreStatus && !cameraStream) {
+                statusMsg.textContent = 'System Standby';
+                statusOverlay.style.background = 'rgba(0,0,0,0.8)';
+            }
+        }
+
+        function appendLoginDigit(digit) {
+            if (loginPinValue.length >= STAFF_CODE_LENGTH) return;
+            loginPinValue += digit;
+            evaluateLoginPin();
+        }
+
+        function backspaceLoginDigit() {
+            if (!loginPinValue.length) return;
+            loginPinValue = loginPinValue.slice(0, -1);
+            evaluateLoginPin();
+        }
+
+        function beginPinnedLogin() {
+            if (!pendingLoginUser) {
+                setPinFeedback('Enter a valid employee ID first.', 'error');
+                return;
+            }
+            if (pinAutoStartTimeoutId) {
+                clearTimeout(pinAutoStartTimeoutId);
+                pinAutoStartTimeoutId = null;
+            }
+
+            expectedLoginUserId = pendingLoginUser.id;
+            expectedLoginUserName = pendingLoginUser.name;
+            closeLoginPinPanel({ reset: false, restoreStatus: false });
+            startCamera('login');
+        }
 
         async function setCameraState(active) {
             try {
@@ -367,6 +672,7 @@
         }
 
         function stopCamera() {
+            currentActionType = null;
             if (sessionTimeoutId) {
                 clearTimeout(sessionTimeoutId);
                 sessionTimeoutId = null;
@@ -388,11 +694,12 @@
             cameraControls.classList.remove('d-none');
             activeControls.classList.add('d-none');
             statusSpinner.classList.add('d-none');
+            closeLoginPinPanel({ reset: true, restoreStatus: false });
             setCameraState(false);
         }
 
         async function startCamera(actionType) {
-            currentActionType = actionType;
+            currentActionType = actionType || null;
             if (!isLocal || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 statusMsg.textContent = "System in remote standby";
                 return;
@@ -424,7 +731,11 @@
                     }
                     cameraStream = stream;
                     video.srcObject = stream;
-                    statusMsg.textContent = "Scanning for identity...";
+                    if (currentActionType === 'login' && expectedLoginUserName) {
+                        statusMsg.textContent = `Looking for ${expectedLoginUserName}...`;
+                    } else {
+                        statusMsg.textContent = "Scanning for identity...";
+                    }
                     statusOverlay.style.background = "rgba(0,0,0,0.5)";
                     processIntervalId = setInterval(processFrame, 200); // 5 FPS
                 })
@@ -436,9 +747,27 @@
                 });
         }
 
-        btnActivateLogin.addEventListener('click', () => startCamera('login'));
-        btnActivateLogout.addEventListener('click', () => startCamera('logout'));
+        btnActivateLogin.addEventListener('click', openLoginPinPanel);
+        btnActivateLogout.addEventListener('click', () => {
+            expectedLoginUserId = null;
+            expectedLoginUserName = null;
+            startCamera('logout');
+        });
         btnCancelSession.addEventListener('click', () => stopCamera());
+        btnClosePinPanel.addEventListener('click', cancelPinnedLogin);
+        btnCancelPinLogin.addEventListener('click', cancelPinnedLogin);
+        loginPinPanel.addEventListener('click', (event) => {
+            if (event.target === loginPinPanel) {
+                cancelPinnedLogin();
+            }
+        });
+        btnClearPin.addEventListener('click', () => clearLoginSelection());
+        btnBackspacePin.addEventListener('click', backspaceLoginDigit);
+        btnStartPinLogin.addEventListener('click', beginPinnedLogin);
+        keypadDigitButtons.forEach(button => {
+            button.addEventListener('click', () => appendLoginDigit(button.dataset.keypadDigit || ''));
+        });
+        renderPinValue();
 
         // Start in standby
         stopCamera();
@@ -465,7 +794,10 @@
             fetch('/api/recognize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: dataURL })
+                body: JSON.stringify({
+                    image: dataURL,
+                    expected_user_id: currentActionType === 'login' ? expectedLoginUserId : null
+                })
             })
             .then(async response => {
                 if (response.status === 429) {
@@ -491,6 +823,7 @@
 
                 if (data.status === 'success' && data.faces.length > 0) {
                     let mainFace = data.faces[0]; 
+                    const verifiedFace = data.faces.find(face => face.verified && face.user_id);
                     
                     // GCash-style Blink Feedback
                     if (data.faces.some(f => f.blink_detected)) {
@@ -499,21 +832,31 @@
                     }
 
                     // Auto-record if verified and logic is in manual trigger mode
-                    if (mainFace.verified && mainFace.user_id && currentActionType && !isSubmittingAttendance) {
+                    if (verifiedFace && currentActionType && !isSubmittingAttendance) {
                         const action = currentActionType;
                         currentActionType = null; // Clear immediately to prevent duplicate loops (409 Conflict)
-                        recordAttendance(mainFace.user_id, action);
+                        recordAttendance(verifiedFace.user_id, action);
                     }
 
                     data.faces.forEach(face => {
                         const [x, y, w, h] = face.rect;
                         overlayCtx.lineWidth = 4;
-                        overlayCtx.strokeStyle = face.verified ? '#198754' : (face.status === 'recognized' ? '#ffc107' : '#dc3545');
+                        overlayCtx.strokeStyle = face.verified
+                            ? '#198754'
+                            : (face.status === 'recognized' ? '#ffc107' : '#dc3545');
                         overlayCtx.strokeRect(x, y, w, h);
 
                         // Manual trigger instructions
                         if (currentActionType) {
-                            if (!face.verified && face.status === 'recognized') {
+                            if (currentActionType === 'login' && expectedLoginUserName) {
+                                if (face.status === 'mismatch') {
+                                    statusMsg.textContent = "Entered ID does not match the detected face.";
+                                } else if (!face.verified && face.status === 'recognized') {
+                                    statusMsg.textContent = `${expectedLoginUserName}, please BLINK to verify liveness.`;
+                                } else if (face.status !== 'recognized') {
+                                    statusMsg.textContent = `${expectedLoginUserName}, center your face for recognition.`;
+                                }
+                            } else if (!face.verified && face.status === 'recognized') {
                                 statusMsg.textContent = "Please BLINK to verify liveness";
                             } else if (face.status !== 'recognized') {
                                 statusMsg.textContent = "Face not recognized. Please center your face.";
@@ -523,7 +866,9 @@
                 } else if (data.status === 'idle') {
                     statusMsg.textContent = "System Idle";
                 } else {
-                    statusMsg.textContent = "Scanning for identity...";
+                    statusMsg.textContent = currentActionType === 'login' && expectedLoginUserName
+                        ? `Looking for ${expectedLoginUserName}...`
+                        : "Scanning for identity...";
                 }
             })
             .catch(err => {

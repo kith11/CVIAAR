@@ -332,13 +332,23 @@ except Exception as e:
     if hint:
         logging.error("Database URL hint: %s", hint)
     if settings.APP_ROLE == "ADMIN_DASHBOARD":
-        raise RuntimeError(
-            f"ADMIN_DASHBOARD startup aborted: {diagnosis}. "
-            "Set a valid DATABASE_URL on Render or Supabase."
-        ) from e
-    logging.warning("Continuing in LOCAL_KIOSK mode with offline SQLite only.")
+        logging.warning(
+            "ADMIN_DASHBOARD could not reach the remote database. Falling back to local SQLite at %s.",
+            sqlite_path,
+        )
+    else:
+        logging.warning("Continuing in LOCAL_KIOSK mode with offline SQLite only.")
+
     db_url = local_sqlite_url
-    engine = create_checked_engine(db_url)
+    try:
+        engine = create_checked_engine(db_url)
+        logging.info("Successfully connected to fallback local SQLite database.")
+    except Exception as fallback_error:
+        fallback_diagnosis = describe_database_connection_error(fallback_error)
+        raise RuntimeError(
+            f"{settings.APP_ROLE} startup aborted: primary database failed ({diagnosis}) "
+            f"and fallback local SQLite failed ({fallback_diagnosis})."
+        ) from fallback_error
 
 if settings.APP_ROLE == "LOCAL_KIOSK":
     logging.info(
@@ -370,22 +380,26 @@ def get_db():
 # updates (e.g., who is currently verified) between the kiosk and viewer clients.
 # If Upstash is not configured, we fall back to a standard local Redis.
 redis = None
-if settings.UPSTASH_REDIS_URL and settings.UPSTASH_REDIS_TOKEN and UpstashRedis:
-    try:
-        redis = UpstashRedis(url=settings.UPSTASH_REDIS_URL, token=settings.UPSTASH_REDIS_TOKEN)
-        redis.ping() # Test connection
-        logging.info("Successfully connected to Upstash Redis.")
-    except Exception as e:
-        logging.error(f"Error connecting to Upstash Redis: {e}")
-        redis = None
-
-if not redis and settings.REDIS_URL and local_redis:
+if settings.REDIS_URL and local_redis:
     try:
         redis = local_redis.from_url(settings.REDIS_URL, decode_responses=True)
         redis.ping()
         logging.info(f"Successfully connected to local Redis at {settings.REDIS_URL}")
     except Exception as e:
         logging.error(f"Error connecting to local Redis: {e}")
+        redis = None
+
+if not redis and settings.UPSTASH_REDIS_URL and settings.UPSTASH_REDIS_TOKEN and UpstashRedis:
+    try:
+        redis = UpstashRedis(
+            url=settings.UPSTASH_REDIS_URL,
+            token=settings.UPSTASH_REDIS_TOKEN,
+            rest_retries=0,
+        )
+        redis.ping()
+        logging.info("Successfully connected to Upstash Redis.")
+    except Exception as e:
+        logging.error(f"Error connecting to Upstash Redis: {e}")
         redis = None
 
 def get_redis():
@@ -395,39 +409,70 @@ def get_redis():
     return redis
 
 # --- Application Modules ---
-# These modules are initialized only if the application is running in "LOCAL_KIOSK" mode,
-# as they are responsible for hardware interaction (camera) and heavy processing (face engine).
-if settings.APP_ROLE == "LOCAL_KIOSK":
-    from modules.camera import Camera
-    from modules.face_engine import FaceEngine
-    from modules.sync_engine import SyncEngine
-    
-    # Camera module for capturing video frames.
-    camera = Camera()
-    # FaceEngine handles face detection, recognition, and blink detection.
-    face_engine = FaceEngine(
-        model_path=os.path.join(basedir, "data", "lbph_model.yml"),
-        faces_dir=os.path.join(basedir, "data", "faces"),
-    )
-    # SyncEngine is a background worker that syncs offline data with a remote server.
-    if settings.SYNC_ENABLED:
-        sync_engine = SyncEngine(
-            database_url=local_sqlite_url,
-            supabase_url=supabase_rest_url or "",
-            supabase_key=supabase_rest_key or "",
-            remote_db_url=remote_database_url,
-            sync_interval=30, # Sync every 30 seconds
-            device_id=settings.DEVICE_ID
-        )
-        sync_engine.start_sync_worker()
-    else:
-        sync_engine = None
-        logging.info("Sync engine is disabled in configuration.")
-else:
-    # In admin mode, these modules are not needed.
-    camera = None
-    face_engine = None
-    sync_engine = None
+# Kiosk-only services are initialized lazily so the web app can bind its port
+# even when camera/vision dependencies are slow or unavailable at import time.
+Camera = None
+FaceEngine = None
+SyncEngine = None
+camera = None
+face_engine = None
+sync_engine = None
+_kiosk_runtime_lock = threading.Lock()
+
+
+def ensure_kiosk_runtime() -> bool:
+    global Camera, FaceEngine, SyncEngine, camera, face_engine, sync_engine
+
+    if settings.APP_ROLE != "LOCAL_KIOSK":
+        return True
+
+    if camera is not None and face_engine is not None:
+        return True
+
+    with _kiosk_runtime_lock:
+        if camera is not None and face_engine is not None:
+            return True
+
+        try:
+            if Camera is None or FaceEngine is None or SyncEngine is None:
+                from modules.camera import Camera as CameraCls
+                from modules.face_engine import FaceEngine as FaceEngineCls
+                from modules.sync_engine import SyncEngine as SyncEngineCls
+
+                Camera = CameraCls
+                FaceEngine = FaceEngineCls
+                SyncEngine = SyncEngineCls
+
+            if camera is None:
+                camera = Camera()
+
+            if face_engine is None:
+                face_engine = FaceEngine(
+                    model_path=os.path.join(basedir, "data", "lbph_model.yml"),
+                    faces_dir=os.path.join(basedir, "data", "faces"),
+                )
+
+            if settings.SYNC_ENABLED and sync_engine is None:
+                sync_engine = SyncEngine(
+                    database_url=local_sqlite_url,
+                    supabase_url=supabase_rest_url or "",
+                    supabase_key=supabase_rest_key or "",
+                    remote_db_url=remote_database_url,
+                    sync_interval=30,
+                    device_id=settings.DEVICE_ID,
+                )
+                sync_engine.start_sync_worker()
+            elif not settings.SYNC_ENABLED:
+                logging.info("Sync engine is disabled in configuration.")
+
+            return True
+        except Exception as exc:
+            logging.error("Kiosk runtime initialization failed: %s", exc)
+            logging.error(traceback.format_exc())
+            camera = None
+            face_engine = None
+            sync_engine = None
+            return False
 
 # --- Environment-based Tunables ---
 # These functions allow tuning recognition parameters via environment variables without code changes.
@@ -1134,6 +1179,7 @@ async def video_feed():
     """Provides the live MJPEG video stream from the camera."""
     if settings.APP_ROLE != "LOCAL_KIOSK":
         return RedirectResponse(url="/admin")
+    ensure_kiosk_runtime()
     return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 # --- Authentication Routes ---
@@ -1725,6 +1771,10 @@ async def enroll_page(request: Request, user_id: int, db: Session = Depends(get_
     if not user:
         request.state.flash("User not found!", "danger")
         return RedirectResponse(url="/admin", status_code=303)
+
+    user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
+    os.makedirs(user_dir, exist_ok=True)
+
     return render_template(request, "enroll.html", {
         "user": user,
         "re_enroll": re_enroll,
@@ -1743,13 +1793,14 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
     """
     if settings.APP_ROLE != "LOCAL_KIOSK":
         return JSONResponse({'status': 'error', 'message': 'Capture not available on this service'}, status_code=404)
+    if not ensure_kiosk_runtime():
+        return JSONResponse({'status': 'error', 'message': 'Camera and face engine are not available right now.'}, status_code=503)
     guard = require_admin_api(request)
     if guard:
         return guard
     
     user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
-    if not os.path.exists(user_dir):
-        return JSONResponse({'status': 'error', 'message': 'User directory not found'}, status_code=404)
+    os.makedirs(user_dir, exist_ok=True)
 
     existing = get_enrollment_total_count(user_dir)
     pose_counts = get_enrollment_pose_counts(user_dir)
@@ -1763,6 +1814,15 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
 
     data = await request.json()
     image_data = data.get('image')
+    expected_user_id = data.get('expected_user_id')
+
+    if expected_user_id in ("", None):
+        expected_user_id = None
+    else:
+        try:
+            expected_user_id = int(expected_user_id)
+        except (TypeError, ValueError):
+            return JSONResponse({'status': 'error', 'message': 'Invalid expected_user_id'}, status_code=400)
     
     if image_data:
         try:
@@ -1880,6 +1940,8 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
     """
     if settings.APP_ROLE != "LOCAL_KIOSK":
         return JSONResponse({'status': 'error', 'message': 'Recognition not available'}, status_code=404)
+    if not ensure_kiosk_runtime():
+        return JSONResponse({'status': 'error', 'message': 'Recognition service is not available right now.'}, status_code=503)
     
     # Rate limiting check
     client_ip = request.client.host
@@ -1893,6 +1955,15 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
 
     data = await request.json()
     image_data = data.get('image')
+    expected_user_id = data.get('expected_user_id')
+
+    if expected_user_id in ("", None):
+        expected_user_id = None
+    else:
+        try:
+            expected_user_id = int(expected_user_id)
+        except (TypeError, ValueError):
+            return JSONResponse({'status': 'error', 'message': 'Invalid expected_user_id'}, status_code=400)
     
     if image_data:
         try:
@@ -1933,7 +2004,8 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
                     'status': 'unknown',
                     'verified': False,
                     'user_id': None,
-                    'blink_detected': res.blink_detected
+                    'blink_detected': res.blink_detected,
+                    'expected_match': expected_user_id is None,
                 }
 
                 logging.debug(f"Face detection - blink_detected: {res.blink_detected}, bbox: {res.bbox}")
@@ -1968,6 +2040,15 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
                 if candidate and stable:
                     user = db.get(User, label)
                     if user:
+                        expected_match = expected_user_id is None or user.id == expected_user_id
+                        result['expected_match'] = expected_match
+
+                        if not expected_match:
+                            result['name'] = 'ID MISMATCH'
+                            result['status'] = 'mismatch'
+                            results.append(result)
+                            continue
+
                         result['name'] = user.name
                         result['status'] = 'recognized'
                         result['user_id'] = user.id
@@ -2001,6 +2082,8 @@ async def api_recognize(request: Request, db: Session = Depends(get_db)):
 async def set_camera_state(request: Request):
     """Activates or deactivates the camera from the frontend."""
     global camera_active, current_session_user
+    if settings.APP_ROLE == "LOCAL_KIOSK" and not ensure_kiosk_runtime():
+        return JSONResponse({"status": "error", "message": "Camera service is not available right now."}, status_code=503)
     data = await request.json()
     state = data.get("active", False)
     camera_active = state
@@ -2020,6 +2103,8 @@ async def api_attendance_record(request: Request, db: Session = Depends(get_db))
     try:
         if settings.APP_ROLE != "LOCAL_KIOSK":
             return JSONResponse({'status': 'error', 'message': 'Recording not available on this service'}, status_code=404)
+        if not ensure_kiosk_runtime():
+            return JSONResponse({'status': 'error', 'message': 'Attendance services are not available right now.'}, status_code=503)
 
         data = await request.json()
         user_id = data.get('user_id')
@@ -2250,6 +2335,9 @@ async def retrain_model(request: Request, background_tasks: BackgroundTasks):
     guard = require_admin_page(request)
     if guard:
         return guard
+    if settings.APP_ROLE == "LOCAL_KIOSK" and not ensure_kiosk_runtime():
+        request.state.flash("Face engine is not available right now.", "danger")
+        return RedirectResponse(url="/admin", status_code=303)
         
     if face_engine:
         if queue_model_retrain(background_tasks):
@@ -2275,6 +2363,8 @@ async def api_train_model(request: Request, background_tasks: BackgroundTasks):
     guard = require_admin_api(request)
     if guard:
         return guard
+    if settings.APP_ROLE == "LOCAL_KIOSK" and not ensure_kiosk_runtime():
+        return JSONResponse({'status': 'error', 'message': 'Face engine is not available right now.'}, status_code=503)
     if face_engine:
         if queue_model_retrain(background_tasks):
             record_audit_event_with_new_session(
@@ -2497,6 +2587,8 @@ async def reset_faces(user_id: int, request: Request, db: Session = Depends(get_
     guard = require_admin_api(request)
     if guard:
         return guard
+    if settings.APP_ROLE == "LOCAL_KIOSK" and not ensure_kiosk_runtime():
+        return JSONResponse({'status': 'error', 'message': 'Face engine is not available right now.'}, status_code=503)
     user = db.get(User, user_id)
     if face_engine and not try_begin_model_mutation():
         return JSONResponse({'status': 'busy', 'message': 'Face model is already updating.'}, status_code=409)
@@ -2506,17 +2598,16 @@ async def reset_faces(user_id: int, request: Request, db: Session = Depends(get_
         with model_operation(timeout=0.25, message="Face model is being updated. Please try again shortly."):
             if os.path.exists(user_dir):
                 shutil.rmtree(user_dir)
-                os.makedirs(user_dir, exist_ok=True)
-                record_audit_event_with_new_session(
-                    action_type="reset_faces",
-                    entity_type="face_data",
-                    entity_id=user_id,
-                    actor=get_actor_label(request),
-                    summary=f"Reset face data for {user.name if user else f'user {user_id}'}",
-                    details="Face directory cleared for re-enrollment.",
-                )
-                return JSONResponse({'status': 'success', 'message': f'Faces reset for user {user_id}'})
-            return JSONResponse({'status': 'error', 'message': 'User directory not found'}, status_code=404)
+            os.makedirs(user_dir, exist_ok=True)
+            record_audit_event_with_new_session(
+                action_type="reset_faces",
+                entity_type="face_data",
+                entity_id=user_id,
+                actor=get_actor_label(request),
+                summary=f"Reset face data for {user.name if user else f'user {user_id}'}",
+                details="Face directory cleared for re-enrollment.",
+            )
+            return JSONResponse({'status': 'success', 'message': f'Faces reset for user {user_id}'})
     except ModelBusyError as exc:
         return JSONResponse({'status': 'busy', 'message': str(exc)}, status_code=503)
     finally:

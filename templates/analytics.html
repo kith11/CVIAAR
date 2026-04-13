@@ -207,6 +207,58 @@
         padding: 1rem;
     }
 
+    .attention-list {
+        display: grid;
+        gap: 0.9rem;
+    }
+
+    .attention-item {
+        border: 1px solid var(--panel-border);
+        border-radius: 14px;
+        background: var(--panel-bg);
+        padding: 1rem 1.1rem;
+        transition: background 0.2s ease, border-color 0.2s ease;
+    }
+
+    .attention-item:hover {
+        background: #fbfbf9;
+        border-color: #cfc9be;
+    }
+
+    .attention-name {
+        font-size: 0.98rem;
+        font-weight: 700;
+        line-height: 1.3;
+    }
+
+    .attention-reason {
+        color: var(--text-soft);
+        font-size: 0.9rem;
+        line-height: 1.45;
+        margin-top: 0.35rem;
+    }
+
+    .attention-meta {
+        display: flex;
+        gap: 1rem;
+        margin-top: 0.7rem;
+        color: var(--text-soft);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 700;
+    }
+
+    .attention-empty {
+        border: 1px dashed var(--panel-border);
+        border-radius: 14px;
+        background: var(--panel-muted);
+        padding: 1.25rem;
+        text-align: center;
+        color: var(--text-soft);
+        font-size: 0.9rem;
+    }
+
     @media print {
         .filter-card,
         .page-actions {
@@ -305,8 +357,8 @@
     <div class="card summary-shell shadow-none mb-4">
         <div class="card-body p-3">
             <div class="mb-3">
-                <div class="panel-title">Summary Notes</div>
-                <p class="panel-copy">Short explanations of the main attendance patterns in the selected period.</p>
+                <div class="panel-title">Key Takeaways</div>
+                <p class="panel-copy">Simple notes that explain the main attendance patterns in this period.</p>
             </div>
             <div id="narrativeInsights" class="row g-3">
                 <div class="col-12 text-center py-2">
@@ -323,7 +375,7 @@
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <div>
                         <div class="panel-title">Attendance by Day</div>
-                        <p class="panel-copy">Compare on-time, late, and absent records across the week.</p>
+                        <p class="panel-copy">See which days had more on-time, late, or absent records.</p>
                         <div id="weeklyComparison" class="x-small text-muted"></div>
                     </div>
                     <div class="btn-group btn-group-xs">
@@ -339,7 +391,7 @@
         <div class="col-lg-4">
             <div class="card chart-card h-100">
                 <div class="panel-title">Attendance Breakdown</div>
-                <p class="panel-copy mb-4">How the selected attendance records are split across on-time, late, and absent statuses.</p>
+                <p class="panel-copy mb-4">A quick split of on-time, late, and absent records.</p>
                 <div style="height: 280px; position: relative;">
                     <canvas id="statusChart"></canvas>
                     <div class="position-absolute top-50 start-50 translate-middle text-center">
@@ -350,44 +402,22 @@
                 <div id="statusLegend" class="mt-4 row g-2"></div>
             </div>
         </div>
-
-        <!-- Hourly Engagement (Plotly) -->
-        <div class="col-12">
-            <div class="card chart-card">
-                <div class="mb-4">
-                    <div class="panel-title">Common Check-In Times</div>
-                    <p class="panel-copy">This shows the hours when people most often log their attendance.</p>
-                </div>
-                <div id="peakPlotly" style="height: 400px;"></div>
-            </div>
-        </div>
     </div>
 
-    <!-- Predictive Risk Table -->
+    <!-- Predictive Risk List -->
     <div class="card table-shell shadow-none mb-5">
         <div class="card-header p-4 border-0">
             <div class="d-flex justify-content-between align-items-center">
                 <div>
-                    <div class="panel-title mb-1">People Who May Need Follow-Up</div>
-                    <p class="panel-copy">A simple watch list based on recent lateness and absences.</p>
+                    <div class="panel-title mb-1">People To Check In With</div>
+                    <p class="panel-copy">A simple list of people who were late or absent more often recently.</p>
                 </div>
             </div>
         </div>
-        <div class="table-responsive">
-            <table class="table table-hover mb-0 align-middle" id="riskTable">
-                <thead>
-                    <tr class="bg-light small text-uppercase fw-bold text-muted">
-                        <th class="ps-4 py-3 border-0">Name</th>
-                        <th class="py-3 border-0">On-Time Score</th>
-                        <th class="py-3 border-0">Attendance Score</th>
-                        <th class="py-3 border-0">Attention Level</th>
-                        <th class="pe-4 py-3 border-0">Why This Person Appears Here</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr><td colspan="5" class="text-center py-5">Loading attendance review list...</td></tr>
-                </tbody>
-            </table>
+        <div class="p-3 p-md-4">
+            <div id="riskList" class="attention-list">
+                <div class="attention-empty">Loading attendance review list...</div>
+            </div>
         </div>
     </div>
 </div>
@@ -464,7 +494,6 @@
             
             renderWeeklyPlotly(currentData.weekly_trends);
             renderStatusChart(currentData.status_distribution);
-            renderPeakPlotly(currentData.peak_arrival);
             renderStrategicRiskTable(currentData.risk_users);
             renderNarrativeInsights(currentData.insights);
             updateSummaryCards(currentData);
@@ -628,83 +657,44 @@
         });
     }
 
-    function renderPeakPlotly(data) {
-        if (!data || !data.data || data.data.every(v => v === 0)) {
-            document.getElementById('peakPlotly').innerHTML = '<div class="h-100 d-flex align-items-center justify-content-center text-muted small">No check-in records were found for the selected period.</div>';
-            return;
-        }
-
-        const trace = {
-            x: data.labels,
-            y: data.data,
-            type: 'scatter',
-            mode: 'lines+markers',
-            line: { shape: 'spline', color: '#4e73df', width: 3 },
-            marker: { size: 6, color: '#4e73df' },
-            fill: 'tozeroy',
-            fillcolor: 'rgba(78, 115, 223, 0.05)',
-            hovertemplate: '<b>%{x}</b><br>Check-ins: %{y}<extra></extra>'
-        };
-
-        const layout = {
-            margin: { t: 10, b: 40, l: 40, r: 20 },
-            showlegend: false,
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
-            xaxis: { gridcolor: '#f8f9fa', tickangle: -45, tickfont: { size: 10 } },
-            yaxis: { gridcolor: '#f8f9fa', zeroline: false }
-        };
-
-        Plotly.newPlot('peakPlotly', [trace], layout, { responsive: true, displayModeBar: false });
-    }
-
     function renderStrategicRiskTable(users) {
-        const tbody = document.querySelector('#riskTable tbody');
-        tbody.innerHTML = '';
+        const list = document.getElementById('riskList');
+        list.innerHTML = '';
         if (!users || users.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="text-center py-5 text-muted small">No one currently stands out as needing extra attendance follow-up.</td></tr>';
+            list.innerHTML = '<div class="attention-empty">No one currently stands out as needing extra attendance follow-up.</div>';
             return;
         }
 
         users.forEach(u => {
             const riskColor = u.risk_level === 'High' ? 'danger' : 'warning';
-            const punctuality = Math.max(0, 100 - parseFloat(u.late_rate || 0));
-            const engagement = Math.max(0, 100 - parseFloat(u.absent_rate || 0));
-            const riskLabel = u.risk_level === 'High' ? 'Needs attention' : 'Watch';
+            const lateRate = Number.parseFloat(u.late_rate || 0) || 0;
+            const absentRate = Number.parseFloat(u.absent_rate || 0) || 0;
+            const riskLabel = u.risk_level === 'High' ? 'Needs attention' : 'Watch closely';
+            const encodedName = JSON.stringify(u.name);
+            let reason = 'Recent attendance needs a quick check-in.';
 
-            tbody.innerHTML += `
-                <tr class="drill-down-active" onclick="showDeepDive('${u.name}', 0, 0, 0, true)">
-                    <td class="ps-4 py-3">
+            if (absentRate >= 15 && lateRate >= 30) {
+                reason = 'Has had several absences and late arrivals recently.';
+            } else if (absentRate >= 15) {
+                reason = 'Has had several absences recently.';
+            } else if (lateRate >= 30) {
+                reason = 'Has been late several times recently.';
+            }
+
+            list.innerHTML += `
+                <button type="button" class="attention-item drill-down-active text-start w-100" onclick='showDeepDive(${encodedName}, 0, 0, 0, true)'>
+                    <div class="d-flex justify-content-between align-items-start gap-3">
                         <div>
-                            <div class="fw-bold text-dark">${u.name}</div>
-                            <div class="small text-muted">Attendance review</div>
+                            <div class="attention-name">${u.name}</div>
+                            <div class="attention-reason">${reason}</div>
                         </div>
-                    </td>
-                    <td>
-                        <div class="d-flex align-items-center">
-                            <div class="score-track flex-grow-1 me-3">
-                                <div class="score-fill on-time" style="width: ${punctuality}%"></div>
-                            </div>
-                            <span class="small fw-bold">${punctuality}%</span>
-                        </div>
-                    </td>
-                    <td>
-                        <div class="d-flex align-items-center">
-                            <div class="score-track flex-grow-1 me-3">
-                                <div class="score-fill attendance" style="width: ${engagement}%"></div>
-                            </div>
-                            <span class="small fw-bold">${engagement}%</span>
-                        </div>
-                    </td>
-                    <td>
-                        <span class="tone-chip ${riskColor}">
-                            ${riskLabel}
-                        </span>
-                    </td>
-                    <td class="pe-4 py-3">
-                        <div class="small text-muted" style="max-width: 300px; line-height: 1.5;">${u.prediction}</div>
-                    </td>
-                </tr>
+                        <span class="tone-chip ${riskColor}">${riskLabel}</span>
+                    </div>
+                    <div class="attention-meta">
+                        <span>Late ${lateRate.toFixed(1)}%</span>
+                        <span>Absent ${absentRate.toFixed(1)}%</span>
+                    </div>
+                </button>
             `;
         });
     }
@@ -753,11 +743,6 @@
                         <span class="fw-bold">${absent}</span>
                     </li>
                 </ul>
-            </div>
-
-            <div class="detail-note">
-                <h6 class="fw-bold small mb-2">What This Means</h6>
-                <p class="x-small text-dark mb-0">This panel gives a quick view of how many records were on time, late, or absent for ${label} in the selected period.</p>
             </div>
         `;
 

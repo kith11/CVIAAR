@@ -39,6 +39,21 @@
     let captured = 0;
     let isTraining = false;
     let resetDone = !isReEnroll;
+    let captureStarted = false;
+    let cameraReady = false;
+    let captureStartTimeout = null;
+
+    function scheduleCaptureStart() {
+        if (captureStarted || !resetDone || !cameraReady) return;
+        if (captureStartTimeout) clearTimeout(captureStartTimeout);
+        captureStarted = true;
+        messageDiv.textContent = "Ready! Starting capture in 2 seconds...";
+        messageDiv.className = "mt-2 text-info";
+        captureStartTimeout = setTimeout(() => {
+            captureStartTimeout = null;
+            captureFace();
+        }, 2000);
+    }
 
     if (isReEnroll) {
         messageDiv.textContent = "Re-enrollment: Resetting existing faces...";
@@ -48,6 +63,7 @@
                 if (data.status === 'success') {
                     resetDone = true;
                     messageDiv.textContent = "Faces reset. Camera should start now...";
+                    scheduleCaptureStart();
                 } else {
                     messageDiv.textContent = "Error resetting faces: " + data.message;
                     messageDiv.className = "mt-2 text-danger";
@@ -63,6 +79,12 @@
     startCamera();
 
     function startCamera() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            messageDiv.textContent = "Error: This browser does not support camera access.";
+            messageDiv.className = "mt-2 text-danger";
+            return;
+        }
+
         if (!window.isSecureContext && window.location.hostname !== 'localhost') {
             messageDiv.textContent = "Error: Camera requires a secure context (HTTPS).";
             messageDiv.className = "mt-2 text-danger";
@@ -72,16 +94,12 @@
         navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
             .then(stream => {
                 video.srcObject = stream;
+                cameraReady = true;
                 messageDiv.textContent = "Camera active. Waiting for initialization...";
-                
-                // Wait for reset and video to be ready
-                const checkReady = setInterval(() => {
-                    if (resetDone && video.readyState === video.HAVE_ENOUGH_DATA) {
-                        clearInterval(checkReady);
-                        messageDiv.textContent = "Ready! Starting capture in 2 seconds...";
-                        setTimeout(captureFace, 2000);
-                    }
-                }, 500);
+                scheduleCaptureStart();
+                video.play().catch(err => {
+                    console.warn("Video autoplay was interrupted:", err);
+                });
             })
             .catch(err => {
                 console.error("Camera error:", err);
@@ -89,12 +107,12 @@
                 navigator.mediaDevices.getUserMedia({ video: true })
                     .then(stream => {
                         video.srcObject = stream;
-                        const checkReady = setInterval(() => {
-                            if (resetDone && video.readyState === video.HAVE_ENOUGH_DATA) {
-                                clearInterval(checkReady);
-                                setTimeout(captureFace, 2000);
-                            }
-                        }, 500);
+                        cameraReady = true;
+                        messageDiv.textContent = "Camera active. Waiting for initialization...";
+                        scheduleCaptureStart();
+                        video.play().catch(err => {
+                            console.warn("Video autoplay was interrupted:", err);
+                        });
                     })
                     .catch(err2 => {
                         console.error("Camera fallback failed:", err2);
@@ -107,7 +125,7 @@
     function captureFace() {
         if (captured >= captureTarget || isTraining) return;
 
-        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0) {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             context.drawImage(video, 0, 0, canvas.width, canvas.height);

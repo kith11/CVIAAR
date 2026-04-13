@@ -6,10 +6,22 @@ __pycache__/
 # Environment
 venv/
 .venv/
+.env
+.codex
 
 # Databases
 data/attendance.db
 *.db
+*.sqlite3
+data/offline/
+data/faces/
+data/app.pid
+data/lbph_model.yml
+
+# Local caches and backups
+__pycache__/
+CVIAAR-main/
+send/
 
 # macOS
 .DS_Store
