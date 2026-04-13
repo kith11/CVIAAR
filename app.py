@@ -593,6 +593,7 @@ RECOGNITION_STREAK_REQUIRED = _env_int("RECOGNITION_STREAK_REQUIRED", 2)
 RECOGNITION_STREAK_TIMEOUT_SEC = _env_float("RECOGNITION_STREAK_TIMEOUT_SEC", 1.0)
 ATTENDANCE_DEDUP_WINDOW_SEC = _env_float("ATTENDANCE_DEDUP_WINDOW_SEC", 5.0)
 ENROLLMENT_CAPTURE_TARGET = _env_int("ENROLLMENT_CAPTURE_TARGET", 40)
+REENROLLMENT_CAPTURE_TARGET = _env_int("REENROLLMENT_CAPTURE_TARGET", 25)
 ENROLLMENT_POSE_BUCKETS = ("center", "left", "right", "up", "down")
 ENROLLMENT_BUCKET_TARGET = max(4, ENROLLMENT_CAPTURE_TARGET // len(ENROLLMENT_POSE_BUCKETS))
 
@@ -1865,11 +1866,14 @@ async def enroll_page(request: Request, user_id: int, db: Session = Depends(get_
     user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
     os.makedirs(user_dir, exist_ok=True)
 
+    capture_target = REENROLLMENT_CAPTURE_TARGET if re_enroll else ENROLLMENT_CAPTURE_TARGET
+    pose_bucket_target = max(4, capture_target // len(ENROLLMENT_POSE_BUCKETS))
+
     return render_template(request, "enroll.html", {
         "user": user,
         "re_enroll": re_enroll,
-        "capture_target": ENROLLMENT_CAPTURE_TARGET,
-        "pose_bucket_target": ENROLLMENT_BUCKET_TARGET,
+        "capture_target": capture_target,
+        "pose_bucket_target": pose_bucket_target,
     })
 
 @app.post("/api/capture/{user_id}")
@@ -1892,17 +1896,23 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
     user_dir = os.path.join(basedir, 'data', 'faces', str(user_id))
     os.makedirs(user_dir, exist_ok=True)
 
+    data = await request.json()
+    requested_target = data.get('capture_target')
+    capture_target = ENROLLMENT_CAPTURE_TARGET
+    if isinstance(requested_target, int) and 1 <= requested_target <= 200:
+        capture_target = requested_target
+    pose_bucket_target = max(4, capture_target // len(ENROLLMENT_POSE_BUCKETS))
+
     existing = get_enrollment_total_count(user_dir)
     pose_counts = get_enrollment_pose_counts(user_dir)
-    if existing >= ENROLLMENT_CAPTURE_TARGET:
+    if existing >= capture_target:
         return JSONResponse({
             'status': 'complete',
             'count': existing,
-            'target': ENROLLMENT_CAPTURE_TARGET,
+            'target': capture_target,
             'guidance': "Enrollment set complete.",
         })
 
-    data = await request.json()
     image_data = data.get('image')
     expected_user_id = data.get('expected_user_id')
 
@@ -1955,7 +1965,7 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
             return JSONResponse({
                 'status': 'retry',
                 'count': existing,
-                'target': ENROLLMENT_CAPTURE_TARGET,
+                'target': capture_target,
                 'message': "Face crop was empty. Please re-center your face.",
                 'guidance': pose_instruction(suggest_next_pose(pose_counts)),
             })
@@ -1967,17 +1977,17 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
             return JSONResponse({
                 'status': 'retry',
                 'count': existing,
-                'target': ENROLLMENT_CAPTURE_TARGET,
+                'target': capture_target,
                 'message': quality.get("reason", "Capture quality too low."),
                 'guidance': pose_instruction(suggest_next_pose(pose_counts)),
                 'pose_bucket': pose_bucket,
             })
 
-        if pose_counts.get(pose_bucket, 0) >= ENROLLMENT_BUCKET_TARGET:
+        if pose_counts.get(pose_bucket, 0) >= pose_bucket_target:
             return JSONResponse({
                 'status': 'retry',
                 'count': existing,
-                'target': ENROLLMENT_CAPTURE_TARGET,
+                'target': capture_target,
                 'message': f"We have enough {pose_bucket} images. {pose_instruction(suggest_next_pose(pose_counts))}",
                 'guidance': pose_instruction(suggest_next_pose(pose_counts)),
                 'pose_bucket': pose_bucket,
@@ -1987,7 +1997,7 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
             return JSONResponse({
                 'status': 'retry',
                 'count': existing,
-                'target': ENROLLMENT_CAPTURE_TARGET,
+                'target': capture_target,
                 'message': "That frame is too similar to the previous one. Change your head angle slightly.",
                 'guidance': pose_instruction(suggest_next_pose(pose_counts)),
                 'pose_bucket': pose_bucket,
@@ -2003,7 +2013,7 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
         return JSONResponse({
             'status': 'success',
             'count': updated_count,
-            'target': ENROLLMENT_CAPTURE_TARGET,
+            'target': capture_target,
             'message': f"Captured {pose_bucket} pose successfully.",
             'guidance': pose_instruction(next_pose),
             'pose_bucket': pose_bucket,
@@ -2013,7 +2023,7 @@ async def api_capture(user_id: int, request: Request, db: Session = Depends(get_
     return JSONResponse({
         'status': 'no_face',
         'count': existing,
-        'target': ENROLLMENT_CAPTURE_TARGET,
+        'target': capture_target,
         'message': 'No face detected. Please look directly at the camera.',
         'guidance': pose_instruction(suggest_next_pose(pose_counts)),
     })

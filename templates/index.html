@@ -83,8 +83,8 @@
                     <div class="login-pin-card shadow-lg">
                         <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
                             <div>
-                                <div class="text-uppercase fw-bold small text-muted">Employee Login</div>
-                                <h5 class="fw-bold mb-1">Enter Employee ID</h5>
+                                <div id="pin-panel-subtitle" class="text-uppercase fw-bold small text-muted">Employee Login</div>
+                                <h5 id="pin-panel-title" class="fw-bold mb-1">Enter Employee ID</h5>
                                 <p class="text-muted small mb-0">Use the keypad below. No keyboard is needed.</p>
                             </div>
                             <button type="button" id="btn-close-pin-panel" class="btn btn-sm btn-outline-secondary rounded-circle px-2" aria-label="Close login keypad">
@@ -104,7 +104,7 @@
                         <div id="login-user-preview" class="login-user-preview d-none mb-3">
                             <div class="small text-uppercase text-muted fw-bold">Matched Employee</div>
                             <div id="login-user-name" class="login-user-name">-</div>
-                            <div class="small text-muted">Press LOG IN to start face recognition.</div>
+                            <div id="pin-action-hint" class="small text-muted">Press LOG IN to start face recognition.</div>
                         </div>
 
                         <div class="login-keypad mb-3">
@@ -120,7 +120,7 @@
 
                         <div class="d-grid gap-2">
                             <button type="button" id="btn-start-pin-login" class="btn btn-success py-3 fw-bold" disabled>
-                                <i class="bi bi-person-check-fill me-2"></i>LOG IN
+                                <i id="btn-start-pin-icon" class="bi bi-person-check-fill me-2"></i><span id="btn-start-pin-label">LOG IN</span>
                             </button>
                             <button type="button" id="btn-cancel-pin-login" class="btn btn-outline-secondary py-2 fw-bold">
                                 Cancel
@@ -234,7 +234,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 1.5rem;
+        padding: clamp(0.65rem, 2.5vw, 1.5rem);
         background: linear-gradient(180deg, rgba(4, 15, 28, 0.78), rgba(5, 18, 28, 0.92));
         backdrop-filter: blur(10px);
         -webkit-backdrop-filter: blur(10px);
@@ -242,6 +242,9 @@
 
     .login-pin-card {
         width: min(420px, 100%);
+        max-width: min(100%, 94vw);
+        max-height: min(100%, calc(100vh - 2rem));
+        overflow-y: auto;
         border-radius: 28px;
         background: rgba(255, 255, 255, 0.96);
         padding: 1.5rem;
@@ -302,13 +305,13 @@
     .login-keypad {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 0.75rem;
+        gap: clamp(0.45rem, 1.5vh, 0.75rem);
     }
 
     .login-key {
-        min-height: 64px;
+        min-height: clamp(48px, 8vh, 64px);
         border-radius: 18px;
-        font-size: 1.25rem;
+        font-size: clamp(1rem, 2.4vw, 1.25rem);
         font-weight: 700;
         border: 1px solid rgba(15, 23, 42, 0.08);
     }
@@ -529,10 +532,52 @@
         const SESSION_TIMEOUT_MS = 30000; // 30 seconds limit
         const PIN_AUTO_START_DELAY_MS = 1500;
         let loginPinValue = '';
+        let currentPinAction = 'login';
         let pendingLoginUser = null;
         let expectedLoginUserId = null;
         let expectedLoginUserName = null;
         let pinAutoStartTimeoutId = null;
+        const pinActionConfig = {
+            login: {
+                subtitle: 'Employee Login',
+                title: 'Enter Employee ID',
+                buttonLabel: 'LOG IN',
+                buttonIconClass: 'bi bi-person-check-fill me-2',
+                panelPrompt: 'Enter the 6-digit employee ID to continue.',
+                success: 'Employee ID matched. Starting face recognition soon. Tap Cancel to stop.',
+                status: 'Enter employee ID to begin login.',
+                hint: 'Press LOG IN to start face recognition.'
+            },
+            logout: {
+                subtitle: 'Employee Logout',
+                title: 'Confirm Employee ID',
+                buttonLabel: 'LOG OUT',
+                buttonIconClass: 'bi bi-box-arrow-right me-2',
+                panelPrompt: 'Enter the 6-digit employee ID to continue logout.',
+                success: 'Employee ID matched. Starting logout verification soon. Tap Cancel to stop.',
+                status: 'Enter employee ID to begin logout.',
+                hint: 'Press LOG OUT to start face recognition.'
+            }
+        };
+
+        const pinPanelSubtitle = document.getElementById('pin-panel-subtitle');
+        const pinPanelTitle = document.getElementById('pin-panel-title');
+        const pinActionHint = document.getElementById('pin-action-hint');
+        const btnStartPinLabel = document.getElementById('btn-start-pin-label');
+        const btnStartPinIcon = document.getElementById('btn-start-pin-icon');
+
+        function getPinActionCopy() {
+            return pinActionConfig[currentPinAction] || pinActionConfig.login;
+        }
+
+        function syncPinPanelActionCopy() {
+            const actionCopy = getPinActionCopy();
+            pinPanelSubtitle.textContent = actionCopy.subtitle;
+            pinPanelTitle.textContent = actionCopy.title;
+            pinActionHint.textContent = actionCopy.hint;
+            btnStartPinLabel.textContent = actionCopy.buttonLabel;
+            btnStartPinIcon.className = actionCopy.buttonIconClass;
+        }
 
         function setPinFeedback(message, tone = 'neutral') {
             loginPinFeedback.textContent = message;
@@ -557,7 +602,7 @@
             loginUserPreview.classList.add('d-none');
             loginUserName.textContent = '-';
             btnStartPinLogin.disabled = true;
-            setPinFeedback('Enter the 6-digit employee ID to continue.', 'neutral');
+            setPinFeedback(getPinActionCopy().panelPrompt, 'neutral');
         }
 
         function evaluateLoginPin() {
@@ -573,7 +618,7 @@
             }
 
             if (!loginPinValue.length) {
-                setPinFeedback('Enter the 6-digit employee ID to continue.', 'neutral');
+                setPinFeedback(getPinActionCopy().panelPrompt, 'neutral');
                 return;
             }
 
@@ -592,7 +637,7 @@
             loginUserPreview.classList.remove('d-none');
             loginUserName.textContent = matchedUser.name;
             btnStartPinLogin.disabled = false;
-            setPinFeedback('Employee ID matched. Starting face recognition soon. Tap Cancel to stop.', 'success');
+            setPinFeedback(getPinActionCopy().success, 'success');
 
             if (pinAutoStartTimeoutId) {
                 clearTimeout(pinAutoStartTimeoutId);
@@ -603,12 +648,14 @@
             }, PIN_AUTO_START_DELAY_MS);
         }
 
-        function openLoginPinPanel() {
+        function openLoginPinPanel(actionType = 'login') {
+            currentPinAction = actionType === 'logout' ? 'logout' : 'login';
+            syncPinPanelActionCopy();
             clearLoginSelection();
             evaluateLoginPin();
             loginPinPanel.classList.remove('d-none');
             statusSpinner.classList.add('d-none');
-            statusMsg.textContent = 'Enter employee ID to begin login.';
+            statusMsg.textContent = getPinActionCopy().status;
             statusOverlay.style.background = 'rgba(0,0,0,0.7)';
         }
 
@@ -652,7 +699,7 @@
             expectedLoginUserId = pendingLoginUser.id;
             expectedLoginUserName = pendingLoginUser.name;
             closeLoginPinPanel({ reset: false, restoreStatus: false });
-            startCamera('login');
+            startCamera(currentPinAction);
         }
 
         async function setCameraState(active) {
@@ -731,7 +778,7 @@
                     }
                     cameraStream = stream;
                     video.srcObject = stream;
-                    if (currentActionType === 'login' && expectedLoginUserName) {
+                    if (expectedLoginUserName) {
                         statusMsg.textContent = `Looking for ${expectedLoginUserName}...`;
                     } else {
                         statusMsg.textContent = "Scanning for identity...";
@@ -747,12 +794,8 @@
                 });
         }
 
-        btnActivateLogin.addEventListener('click', openLoginPinPanel);
-        btnActivateLogout.addEventListener('click', () => {
-            expectedLoginUserId = null;
-            expectedLoginUserName = null;
-            startCamera('logout');
-        });
+        btnActivateLogin.addEventListener('click', () => openLoginPinPanel('login'));
+        btnActivateLogout.addEventListener('click', () => openLoginPinPanel('logout'));
         btnCancelSession.addEventListener('click', () => stopCamera());
         btnClosePinPanel.addEventListener('click', cancelPinnedLogin);
         btnCancelPinLogin.addEventListener('click', cancelPinnedLogin);
@@ -796,7 +839,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     image: dataURL,
-                    expected_user_id: currentActionType === 'login' ? expectedLoginUserId : null
+                    expected_user_id: expectedLoginUserId || null
                 })
             })
             .then(async response => {
@@ -848,7 +891,7 @@
 
                         // Manual trigger instructions
                         if (currentActionType) {
-                            if (currentActionType === 'login' && expectedLoginUserName) {
+                            if (expectedLoginUserName) {
                                 if (face.status === 'mismatch') {
                                     statusMsg.textContent = "Entered ID does not match the detected face.";
                                 } else if (!face.verified && face.status === 'recognized') {
@@ -866,7 +909,7 @@
                 } else if (data.status === 'idle') {
                     statusMsg.textContent = "System Idle";
                 } else {
-                    statusMsg.textContent = currentActionType === 'login' && expectedLoginUserName
+                    statusMsg.textContent = expectedLoginUserName
                         ? `Looking for ${expectedLoginUserName}...`
                         : "Scanning for identity...";
                 }
