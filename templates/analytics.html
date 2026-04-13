@@ -436,6 +436,7 @@
 <script>
     let currentData = null;
     let chartObjects = {};
+    const ANALYTICS_AUTO_REFRESH_MS = 30000;
 
     function formatSignedPercent(value) {
         return `${value >= 0 ? '+' : ''}${Number(value || 0).toFixed(1)}%`;
@@ -465,6 +466,14 @@
         document.getElementById('filterForm').addEventListener('submit', (e) => {
             e.preventDefault();
             loadDashboard();
+        });
+
+        setInterval(loadDashboard, ANALYTICS_AUTO_REFRESH_MS);
+        window.addEventListener('online', loadDashboard);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                loadDashboard();
+            }
         });
     });
 

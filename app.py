@@ -310,6 +310,9 @@ local_sqlite_url = f"sqlite:///{sqlite_path}"
 remote_database_url = normalize_database_url(settings.DATABASE_URL)
 supabase_rest_url = normalize_env_value(settings.SUPABASE_URL)
 supabase_rest_key = normalize_env_value(settings.SUPABASE_KEY)
+REMOTE_DB_RETRY_INTERVAL_SEC = 30.0
+_db_binding_lock = threading.Lock()
+_last_remote_retry_at = 0.0
 
 
 def create_checked_engine(database_url: str):
@@ -359,6 +362,83 @@ if settings.APP_ROLE == "LOCAL_KIOSK":
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+
+def switch_database_binding(new_engine, new_db_url: str, *, reason: str) -> None:
+    global engine, db_url
+
+    old_engine = engine
+    engine = new_engine
+    db_url = new_db_url
+    SessionLocal.configure(bind=new_engine)
+
+    try:
+        Base.metadata.create_all(bind=new_engine)
+        ensure_application_schema(new_engine)
+    except Exception as schema_error:
+        logging.error("Database schema sync failed after %s: %s", reason, schema_error)
+
+    analytics_cache.clear()
+    risk_cache.clear()
+
+    target_label = "remote database" if new_db_url == remote_database_url else "local SQLite database"
+    logging.info("Application database switched to %s (%s).", target_label, reason)
+
+    if old_engine is not None and old_engine is not new_engine:
+        try:
+            old_engine.dispose()
+        except Exception as dispose_error:
+            logging.warning("Failed to dispose previous database engine: %s", dispose_error)
+
+
+def fallback_admin_database(exc: Exception) -> None:
+    global _last_remote_retry_at
+
+    if settings.APP_ROLE != "ADMIN_DASHBOARD" or db_url == local_sqlite_url:
+        return
+
+    diagnosis = describe_database_connection_error(exc)
+    with _db_binding_lock:
+        if db_url == local_sqlite_url:
+            return
+
+        logging.warning(
+            "Remote database became unavailable (%s). Falling back to local SQLite at %s.",
+            diagnosis,
+            sqlite_path,
+        )
+        fallback_engine = create_checked_engine(local_sqlite_url)
+        switch_database_binding(fallback_engine, local_sqlite_url, reason="remote database unavailable")
+        _last_remote_retry_at = time.monotonic()
+
+
+def maybe_restore_admin_remote_database() -> None:
+    global _last_remote_retry_at
+
+    if settings.APP_ROLE != "ADMIN_DASHBOARD" or not remote_database_url or db_url == remote_database_url:
+        return
+
+    now = time.monotonic()
+    if (now - _last_remote_retry_at) < REMOTE_DB_RETRY_INTERVAL_SEC:
+        return
+
+    with _db_binding_lock:
+        now = time.monotonic()
+        if db_url == remote_database_url or (now - _last_remote_retry_at) < REMOTE_DB_RETRY_INTERVAL_SEC:
+            return
+
+        _last_remote_retry_at = now
+        try:
+            restored_engine = create_checked_engine(remote_database_url)
+        except Exception as exc:
+            diagnosis = describe_database_connection_error(exc)
+            logging.warning(
+                "Remote database reconnect attempt failed (%s). Continuing with local SQLite fallback.",
+                diagnosis,
+            )
+            return
+
+        switch_database_binding(restored_engine, remote_database_url, reason="remote database reconnected")
+
 # Create tables on startup
 try:
     Base.metadata.create_all(bind=engine)
@@ -369,8 +449,18 @@ except Exception as e:
 
 def get_db():
     """FastAPI dependency to create and manage database sessions per request."""
+    if settings.APP_ROLE == "ADMIN_DASHBOARD":
+        maybe_restore_admin_remote_database()
+
     db = SessionLocal()
     try:
+        if settings.APP_ROLE == "ADMIN_DASHBOARD":
+            try:
+                db.execute(text("SELECT 1"))
+            except Exception as exc:
+                db.close()
+                fallback_admin_database(exc)
+                db = SessionLocal()
         yield db
     finally:
         db.close()

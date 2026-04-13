@@ -245,6 +245,8 @@
 </div>
 
 <script>
+    const ADMIN_ANALYTICS_REFRESH_MS = 30000;
+
     function toggleSection(sectionId) {
         const content = document.getElementById(sectionId + '-content');
         const chevron = document.getElementById(sectionId + '-chevron');
@@ -295,6 +297,13 @@
         
         // Initial fetch
         fetchAnalytics();
+        setInterval(fetchAnalytics, ADMIN_ANALYTICS_REFRESH_MS);
+        window.addEventListener('online', fetchAnalytics);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                fetchAnalytics();
+            }
+        });
     });
 
     // Fetch and Populate Table

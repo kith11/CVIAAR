@@ -38,7 +38,7 @@ services:
     container_name: cviaar-app
     restart: unless-stopped
     ports:
-      - "10000:10000"
+      - "5000:5000"
     volumes:
       - .:/app
       - ./data:/app/data
@@ -46,7 +46,7 @@ services:
     env_file:
       - .env
     environment:
-      - PORT=10000
+      - PORT=5000
       - TZ=Asia/Manila
       - INSTANCE_LOCK_ENABLED=false
       # Override DB and Redis URLs to use the local Docker containers if desired
@@ -59,7 +59,7 @@ services:
       redis:
         condition: service_healthy
     # For live reloading in development, we override the CMD
-    command: ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 10000 --reload"]
+    command: ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 5000 --reload"]
 
 volumes:
   pgdata:

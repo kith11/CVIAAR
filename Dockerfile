@@ -24,7 +24,7 @@ FROM python:3.10-slim
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-ENV PORT=10000
+ENV PORT=5000
 ENV TZ=Asia/Manila
 
 WORKDIR /app
@@ -52,11 +52,11 @@ COPY . .
 RUN mkdir -p data/offline data/faces static/uploads
 
 # Expose the application port
-EXPOSE 10000
+EXPOSE 5000
 
 # Health check to ensure the service is responsive
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:10000/ || exit 1
+    CMD curl -f http://localhost:5000/ || exit 1
 
 # Start the application using Uvicorn
 # Note: We use 0.0.0.0 to allow external access within the Docker network
