@@ -1,0 +1,215 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="text-center">
+    <h2>Enrolling: {{ user.name }}</h2>
+    <p class="text-muted">Please look at the camera. We need to capture {{ capture_target }} quality face images with varied head angles for better accuracy.</p>
+    
+    <div class="position-relative d-inline-block">
+        <video id="video" autoplay playsinline class="img-fluid border rounded" style="max-width: 640px; width: 100%; transform: scaleX(-1);"></video>
+        <canvas id="canvas" style="display:none;"></canvas>
+        <div id="status-overlay" class="position-absolute top-0 start-0 w-100 h-100 d-flex justify-content-center align-items-center d-none" style="background: rgba(0,0,0,0.5);">
+            <div class="text-white h3">Done! Retraining...</div>
+        </div>
+    </div>
+
+    <div class="mt-4" style="max-width: 640px; margin: 20px auto;">
+        <h5>Progress: <span id="count">0</span>/{{ capture_target }}</h5>
+        <div class="progress">
+            <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+        </div>
+        <div id="message" class="mt-2 text-info">Initializing Camera...</div>
+        <div id="guidance" class="mt-2 text-muted small">Start by looking straight at the camera, then follow the angle prompts.</div>
+    </div>
+</div>
+
+<script>
+    const userId = "{{ user.id }}";
+    const isReEnroll = {{ re_enroll|tojson }};
+    const captureTarget = {{ capture_target|tojson }};
+    
+    const progressBar = document.getElementById('progress-bar');
+    const countSpan = document.getElementById('count');
+    const messageDiv = document.getElementById('message');
+    const guidanceDiv = document.getElementById('guidance');
+    const statusOverlay = document.getElementById('status-overlay');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const context = canvas.getContext('2d');
+    
+    let captured = 0;
+    let isTraining = false;
+    let resetDone = !isReEnroll;
+    let captureStarted = false;
+    let cameraReady = false;
+    let captureStartTimeout = null;
+
+    function scheduleCaptureStart() {
+        if (captureStarted || !resetDone || !cameraReady) return;
+        if (captureStartTimeout) clearTimeout(captureStartTimeout);
+        captureStarted = true;
+        messageDiv.textContent = "Ready! Starting capture in 2 seconds...";
+        messageDiv.className = "mt-2 text-info";
+        captureStartTimeout = setTimeout(() => {
+            captureStartTimeout = null;
+            captureFace();
+        }, 2000);
+    }
+
+    if (isReEnroll) {
+        messageDiv.textContent = "Re-enrollment: Resetting existing faces...";
+        fetch(`/api/reset_faces/${userId}`, { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    resetDone = true;
+                    messageDiv.textContent = "Faces reset. Camera should start now...";
+                    scheduleCaptureStart();
+                } else {
+                    messageDiv.textContent = "Error resetting faces: " + data.message;
+                    messageDiv.className = "mt-2 text-danger";
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                messageDiv.textContent = "Network Error. Please try again.";
+            });
+    }
+
+    // Always try to start camera
+    startCamera();
+
+    function startCamera() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            messageDiv.textContent = "Error: This browser does not support camera access.";
+            messageDiv.className = "mt-2 text-danger";
+            return;
+        }
+
+        if (!window.isSecureContext && window.location.hostname !== 'localhost') {
+            messageDiv.textContent = "Error: Camera requires a secure context (HTTPS).";
+            messageDiv.className = "mt-2 text-danger";
+            return;
+        }
+
+        navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
+            .then(stream => {
+                video.srcObject = stream;
+                cameraReady = true;
+                messageDiv.textContent = "Camera active. Waiting for initialization...";
+                scheduleCaptureStart();
+                video.play().catch(err => {
+                    console.warn("Video autoplay was interrupted:", err);
+                });
+            })
+            .catch(err => {
+                console.error("Camera error:", err);
+                // Fallback
+                navigator.mediaDevices.getUserMedia({ video: true })
+                    .then(stream => {
+                        video.srcObject = stream;
+                        cameraReady = true;
+                        messageDiv.textContent = "Camera active. Waiting for initialization...";
+                        scheduleCaptureStart();
+                        video.play().catch(err => {
+                            console.warn("Video autoplay was interrupted:", err);
+                        });
+                    })
+                    .catch(err2 => {
+                        console.error("Camera fallback failed:", err2);
+                        messageDiv.textContent = "Error: Could not access camera.";
+                        messageDiv.className = "mt-2 text-danger";
+                    });
+            });
+    }
+
+    function captureFace() {
+        if (captured >= captureTarget || isTraining) return;
+
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const dataURL = canvas.toDataURL('image/jpeg');
+
+            fetch(`/api/capture/${userId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: dataURL, capture_target: captureTarget })
+            })
+            .then(response => response.json())
+            .then(data => {
+                const target = data.target || captureTarget;
+                if (data.guidance) {
+                    guidanceDiv.textContent = data.guidance;
+                }
+
+                if (data.status === 'success' || data.status === 'complete') {
+                    captured = data.count;
+                    updateProgress(target);
+                    
+                    if (captured >= target) {
+                        startTraining();
+                    } else {
+                        messageDiv.textContent = data.message || "Face captured. Change your angle slightly for the next one.";
+                        messageDiv.className = "mt-2 text-success";
+                        setTimeout(captureFace, 650);
+                    }
+                } else if (data.status === 'retry') {
+                    messageDiv.textContent = data.message || "Adjust your angle slightly and try again.";
+                    messageDiv.className = "mt-2 text-warning";
+                    setTimeout(captureFace, 700);
+                } else if (data.status === 'no_face') {
+                    messageDiv.textContent = data.message || "No face detected. Please look at the camera.";
+                    messageDiv.className = "mt-2 text-warning";
+                    setTimeout(captureFace, 500);
+                } else {
+                    messageDiv.textContent = "Error: " + data.message;
+                    messageDiv.className = "mt-2 text-danger";
+                    setTimeout(captureFace, 1000);
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                setTimeout(captureFace, 1000);
+            });
+        } else {
+            // Video not ready yet
+            setTimeout(captureFace, 100);
+        }
+    }
+
+    function updateProgress(target = captureTarget) {
+        const percent = (captured / target) * 100;
+        progressBar.style.width = percent + '%';
+        countSpan.textContent = captured;
+    }
+
+    function startTraining() {
+        if (isTraining) return;
+        isTraining = true;
+        messageDiv.textContent = "Images collected. Retraining model... (this may take a few seconds)";
+        messageDiv.className = "mt-2 text-info fw-bold";
+        statusOverlay.classList.remove('d-none'); // Show overlay
+        
+        fetch('/api/train', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    messageDiv.textContent = "Model updated! Redirecting...";
+                    setTimeout(() => {
+                        window.location.href = '/admin';
+                    }, 2000);
+                } else {
+                    messageDiv.textContent = "Error: " + (data.message || 'Unknown error');
+                    statusOverlay.classList.add('d-none'); // Hide overlay
+                    isTraining = false;
+                }
+            })
+            .catch(err => {
+                messageDiv.textContent = "Training failed. Check console.";
+                statusOverlay.classList.add('d-none'); // Hide overlay
+                isTraining = false;
+            });
+    }
+</script>
+{% endblock %}

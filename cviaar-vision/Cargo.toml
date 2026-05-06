@@ -1,0 +1,25 @@
+[package]
+name = "cviaar-vision"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+opencv = { version = "0.92", features = ["videoio", "highgui", "imgproc", "objdetect", "dnn"] }
+ort = { version = "2.0.0-rc.12", features = ["cuda", "ndarray"] }
+ndarray = "0.15"
+image = "0.24"
+chrono = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+env_logger = "0.10"
+anyhow = "1.0"
+thiserror = "1.0"
+lazy_static = "1.4"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "vision_benchmarks"
+harness = false

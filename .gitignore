@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment
+venv/
+.venv/
+.codex
+
+# Databases
+data/attendance.db
+*.db
+*.sqlite3
+data/offline/
+data/faces/
+data/app.pid
+data/lbph_model.yml
+
+# Local caches and backups
+__pycache__/
+CVIAAR-main/
+send/
+
+# macOS
+.DS_Store
+
+# Build artifacts
+dist/
+build/
+*.spec
+
+# Rust
+target/
+Cargo.lock
+
+# Other
+*.log
+.idea/

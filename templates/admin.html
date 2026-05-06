@@ -1,0 +1,792 @@
+<!-- 
+    Admin Dashboard (admin.html)
+
+    This is the main administrative interface for managing the attendance system.
+    It provides a comprehensive overview of attendance data and user management tools.
+
+    Key Sections:
+    1.  Summary Stats: Displays high-level counts of total users, present, tardy, and absent.
+    2.  Weekly Trends: A D3.js bar chart visualizing attendance patterns over the week.
+    3.  Risk Prediction: A table that uses a simple predictive model to identify users at risk
+        of being late or absent.
+    4.  User Status Table: A detailed table of all users with their attendance statistics.
+    5.  Sidebar:
+        -   Reports: Allows exporting attendance data to CSV.
+        -   Gmail Registration: A form to add new users to the system.
+        -   System Controls: Buttons to retrain the face recognition model and sign out.
+        -   Recent Logs: A compact list of the most recent attendance activities.
+
+    Data Fetching:
+    - The main user and risk data is initially rendered by the backend.
+    - The user status table and weekly trends chart are populated by an initial fetch to the `/analytics` endpoint.
+    - The "Present" count is updated in real-time by polling the `/api/live-status` endpoint.
+-->
+{% extends "layout.html" %}
+
+{% block extra_vendor_scripts %}
+<script src="https://d3js.org/d3.v7.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="mb-5">
+    <h1 class="section-title">Dashboard</h1>
+    <p class="section-desc">Overview and attendance management</p>
+</div>
+
+<div class="row g-4 g-lg-5">
+    <!-- Main Section -->
+    <div class="col-lg-8">
+        <!-- Summary Stats -->
+        <div class="row mb-4 g-3 g-md-4">
+            <div class="col-6 col-md-3">
+                <div class="card p-2 p-md-3 mb-0 text-center border-0 bg-light">
+                    <div class="text-muted smaller text-uppercase fw-bold mb-1" style="font-size: 0.65rem;">Users</div>
+                    <div class="h4 fw-bold mb-0" id="total-users-count">-</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="card p-2 p-md-3 mb-0 text-center border-0 bg-light">
+                    <div class="text-muted smaller text-uppercase fw-bold mb-1" style="font-size: 0.65rem;">Present</div>
+                    <div class="h4 fw-bold mb-0 text-success" id="total-present-count">-</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="card p-2 p-md-3 mb-0 text-center border-0 bg-light">
+                    <div class="text-muted smaller text-uppercase fw-bold mb-1" style="font-size: 0.65rem;">Tardy</div>
+                    <div class="h4 fw-bold mb-0 text-warning" id="total-tardy-count">-</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="card p-2 p-md-3 mb-0 text-center border-0 bg-light">
+                    <div class="text-muted smaller text-uppercase fw-bold mb-1" style="font-size: 0.65rem;">Absent</div>
+                    <div class="h4 fw-bold mb-0 text-danger" id="total-absent-count">-</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Weekly Trends (D3) -->
+        <div class="card p-0 overflow-hidden mb-4">
+            <div class="card-header-collapsible" onclick="toggleSection('weekly-trends-section')">
+                <div class="fw-bold small text-uppercase"><i class="bi bi-graph-up me-2"></i>Weekly Attendance</div>
+                <i class="bi bi-chevron-down chevron" id="weekly-trends-section-chevron"></i>
+            </div>
+            <div id="weekly-trends-section-content" class="collapse-content">
+                <div class="p-3">
+                    <div id="attendance-d3-chart" class="d3-chart"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Risk Prediction Table -->
+        <div class="card p-0 overflow-hidden mb-4">
+            <div class="card-header-collapsible" onclick="toggleSection('risk-section')">
+                <div class="fw-bold small text-uppercase"><i class="bi bi-exclamation-triangle me-2 text-warning"></i>Attendance Risk Insights</div>
+                <div class="d-flex align-items-center">
+                    <span class="badge bg-light text-dark border-0 small me-3">PREDICTIVE</span>
+                    <i class="bi bi-chevron-down chevron" id="risk-section-chevron"></i>
+                </div>
+            </div>
+            <div id="risk-section-content" class="collapse-content">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="risk-table">
+                        <thead>
+                            <tr>
+                                <th class="ps-4">Name</th>
+                                <th class="text-center">Late Rate</th>
+                                <th class="text-center">Absent Rate</th>
+                                <th class="text-center">Risk Level</th>
+                                <th class="pe-4">Prediction</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% if risks %}
+                                {% for risk in risks %}
+                                <tr>
+                                    <td class="ps-4 fw-bold">{{ risk.name }}</td>
+                                    <td class="text-center">{{ risk.late_rate }}</td>
+                                    <td class="text-center">{{ risk.absent_rate }}</td>
+                                    <td class="text-center">
+                                        <span class="badge bg-{{ 'danger' if risk.risk_level == 'High' else 'warning' if risk.risk_level == 'Medium' else 'info' }}">
+                                            {{ risk.risk_level }}
+                                        </span>
+                                    </td>
+                                    <td class="pe-4 small text-muted">{{ risk.prediction }}</td>
+                                </tr>
+                                {% endfor %}
+                            {% else %}
+                                <tr><td colspan="5" class="text-center py-4 text-muted">No high-risk users detected.</td></tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- User Status Table -->
+        <div class="card p-0 overflow-hidden">
+            <div class="card-header-collapsible" onclick="toggleSection('user-status-section')">
+                <div class="fw-bold small text-uppercase"><i class="bi bi-people me-2"></i>User Status</div>
+                <div class="d-flex align-items-center">
+                    <button class="btn btn-xs btn-outline-secondary border-0 me-2" onclick="event.stopPropagation(); location.reload()"><i class="bi bi-arrow-repeat"></i></button>
+                    <i class="bi bi-chevron-down chevron" id="user-status-section-chevron"></i>
+                </div>
+            </div>
+            <div id="user-status-section-content" class="collapse-content">
+                <div class="p-3 pb-2 border-bottom">
+                    <div class="employee-search-wrap">
+                        <div class="input-group">
+                            <span class="input-group-text border-0 bg-light">
+                                <i class="bi bi-search"></i>
+                            </span>
+                            <input
+                                type="search"
+                                id="employee-search-input"
+                                class="form-control border-0 bg-light"
+                                placeholder="Search by employee name, staff ID, or type..."
+                                autocomplete="off"
+                            >
+                            <button type="button" id="employee-search-clear" class="btn btn-outline-secondary border-0 bg-light d-none">Clear</button>
+                        </div>
+                        <div id="employee-search-suggestions" class="employee-search-suggestions d-none" role="listbox" aria-label="Employee search suggestions"></div>
+                    </div>
+                    <div id="employee-search-result-count" class="x-small text-muted mt-2">Showing all employees.</div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="analytics-table">
+                        <thead>
+                            <tr>
+                                <th class="ps-4">Staff ID</th>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th class="text-center">Present</th>
+                                <th class="text-center">Tardy</th>
+                                <th class="text-center">Absent</th>
+                                <th class="text-end pe-4">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td colspan="7" class="text-center py-5 text-muted">Loading analytics...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sidebar Section -->
+    <div class="col-lg-4">
+        <!-- Export & Reports -->
+        <div class="card p-0 overflow-hidden mb-4">
+            <div class="card-header-collapsible" onclick="toggleSection('export-section')">
+                <div class="fw-bold small text-uppercase"><i class="bi bi-file-earmark-arrow-down me-2"></i>Reports</div>
+                <i class="bi bi-chevron-down chevron" id="export-section-chevron"></i>
+            </div>
+            <div id="export-section-content" class="collapse-content">
+                <div class="p-3">
+                    <div class="d-grid gap-2">
+                        <a href="/export_attendance_csv" class="btn btn-sm btn-outline-secondary text-start border-0 bg-light">
+                            <i class="bi bi-filetype-csv me-2"></i>Export to CSV
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Gmail-based Registration -->
+        <div class="card p-0 overflow-hidden mb-4">
+            <div class="card-header-collapsible" onclick="toggleSection('registration-section')">
+                <div class="fw-bold small text-uppercase"><i class="bi bi-person-plus me-2"></i>Registration</div>
+                <i class="bi bi-chevron-down chevron" id="registration-section-chevron"></i>
+            </div>
+            <div id="registration-section-content" class="collapse-content">
+                <div class="p-3">
+                    <form action="/add_user" method="POST">
+                        <div class="mb-2">
+                            <label class="form-label x-small text-muted mb-1">Full Name</label>
+                            <input type="text" name="name" class="form-control form-control-sm border-0 bg-light" required placeholder="John Doe">
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label x-small text-muted mb-1">Gmail Address</label>
+                            <input type="email" name="email" class="form-control form-control-sm border-0 bg-light" required placeholder="name@gmail.com">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label x-small text-muted mb-1">Employment Type</label>
+                            <select name="employment_type" class="form-select form-select-sm border-0 bg-light">
+                                <option value="Full-time" selected>Full-time</option>
+                                <option value="Part-time">Part-time</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-sm btn-primary w-100 fw-bold">Register & Capture</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Controls -->
+        <div class="card p-0 overflow-hidden mb-4">
+            <div class="card-header-collapsible" onclick="toggleSection('system-section')">
+                <div class="fw-bold small text-uppercase"><i class="bi bi-gear me-2"></i>System</div>
+                <i class="bi bi-chevron-down chevron" id="system-section-chevron"></i>
+            </div>
+            <div id="system-section-content" class="collapse-content">
+                <div class="p-3">
+                    <div class="d-grid gap-2">
+                        <a href="/retrain" class="btn btn-sm btn-outline-secondary text-start border-0 bg-light">
+                            <i class="bi bi-arrow-repeat me-2"></i>Retrain Model
+                        </a>
+                        {% if request.session.get('role') == 'admin' %}
+                        <a href="/logout" class="btn btn-sm btn-outline-danger text-start border-0 bg-light">
+                            <i class="bi bi-box-arrow-right me-2"></i>Sign Out
+                        </a>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Logs (Compact) -->
+        <div class="card p-0 overflow-hidden">
+            <div class="card-header-collapsible" onclick="toggleSection('recent-logs-section')">
+                <div class="fw-bold small text-uppercase fw-bold"><i class="bi bi-clock-history me-2"></i>Recent Logs</div>
+                <i class="bi bi-chevron-down chevron" id="recent-logs-section-chevron"></i>
+            </div>
+            <div id="recent-logs-section-content" class="collapse-content">
+                <div class="list-group list-group-flush">
+                    {% for log in logs[:10] %}
+                    <div class="list-group-item border-0 border-bottom p-3">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span class="fw-bold small">{{ log.user.name }}</span>
+                            <span class="badge bg-{{ 'success' if log.status in ['Present', 'On Time'] else 'warning' if log.status in ['Tardy', 'Late'] else 'danger' if log.status in ['Absent', 'AM Absent', 'PM Absent'] else 'light text-dark' }} small">
+                                {{ log.status }}
+                            </span>
+                        </div>
+                        <div class="text-muted smaller" style="font-size: 0.75rem;">{{ log.timestamp.strftime('%I:%M %p') }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .employee-search-wrap {
+        position: relative;
+    }
+
+    .employee-search-suggestions {
+        position: absolute;
+        top: calc(100% + 0.35rem);
+        left: 0;
+        right: 0;
+        z-index: 20;
+        background: #fff;
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        border-radius: 10px;
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
+        overflow: hidden;
+        max-height: 270px;
+        overflow-y: auto;
+    }
+
+    .employee-search-suggestion {
+        width: 100%;
+        border: 0;
+        background: #fff;
+        text-align: left;
+        padding: 0.55rem 0.75rem;
+        font-size: 0.9rem;
+        border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+    }
+
+    .employee-search-suggestion:last-child {
+        border-bottom: 0;
+    }
+
+    .employee-search-suggestion:hover,
+    .employee-search-suggestion.is-active {
+        background: rgba(13, 110, 253, 0.09);
+    }
+</style>
+
+<script>
+    const ADMIN_ANALYTICS_REFRESH_MS = 30000;
+    const SEARCH_SUGGESTION_LIMIT = 8;
+    let latestAnalyticsStats = [];
+    let activeSuggestionIndex = -1;
+
+    function normalizeSearchText(value) {
+        return String(value || '').toLowerCase().trim();
+    }
+
+    function getSearchElements() {
+        return {
+            input: document.getElementById('employee-search-input'),
+            clearBtn: document.getElementById('employee-search-clear'),
+            suggestions: document.getElementById('employee-search-suggestions'),
+            count: document.getElementById('employee-search-result-count')
+        };
+    }
+
+    function buildUserSearchText(user) {
+        const displayId = user.staff_code || user.id;
+        return normalizeSearchText(`${user.name} ${displayId} ${user.employment_type || ''}`);
+    }
+
+    function hideEmployeeSuggestions() {
+        const { suggestions } = getSearchElements();
+        if (!suggestions) return;
+        suggestions.classList.add('d-none');
+        suggestions.innerHTML = '';
+        activeSuggestionIndex = -1;
+    }
+
+    function renderEmployeeSuggestions(query) {
+        const { suggestions } = getSearchElements();
+        if (!suggestions) return;
+
+        const normalized = normalizeSearchText(query);
+        if (!normalized || !latestAnalyticsStats.length) {
+            hideEmployeeSuggestions();
+            return;
+        }
+
+        const matches = latestAnalyticsStats
+            .filter(user => buildUserSearchText(user).includes(normalized))
+            .slice(0, SEARCH_SUGGESTION_LIMIT);
+
+        if (!matches.length) {
+            hideEmployeeSuggestions();
+            return;
+        }
+
+        suggestions.innerHTML = matches.map((user, index) => {
+            const displayId = user.staff_code || user.id;
+            const empType = user.employment_type || 'Full-time';
+            return `
+                <button
+                    type="button"
+                    class="employee-search-suggestion ${index === activeSuggestionIndex ? 'is-active' : ''}"
+                    data-user-id="${user.id}"
+                    role="option"
+                    aria-selected="${index === activeSuggestionIndex ? 'true' : 'false'}"
+                >
+                    <span class="fw-bold">${user.name}</span>
+                    <span class="text-muted small"> - ${displayId} - ${empType}</span>
+                </button>
+            `;
+        }).join('');
+        suggestions.classList.remove('d-none');
+    }
+
+    function applyEmployeeTableSearch() {
+        const { input, clearBtn, count } = getSearchElements();
+        if (!input) return;
+
+        const query = normalizeSearchText(input.value);
+        const rows = Array.from(document.querySelectorAll('#analytics-table tbody tr[data-search]'));
+        let visibleCount = 0;
+
+        rows.forEach(row => {
+            const haystack = row.dataset.search || '';
+            const isVisible = !query || haystack.includes(query);
+            row.classList.toggle('d-none', !isVisible);
+            if (isVisible) visibleCount += 1;
+        });
+
+        if (clearBtn) {
+            clearBtn.classList.toggle('d-none', !query);
+        }
+        if (count) {
+            count.textContent = query
+                ? `Showing ${visibleCount} matching employee${visibleCount === 1 ? '' : 's'}.`
+                : 'Showing all employees.';
+        }
+    }
+
+    function focusEmployeeRow(userId) {
+        const row = document.querySelector(`#analytics-table tbody tr[data-user-id="${userId}"]`);
+        if (!row) return;
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        row.classList.add('table-warning');
+        setTimeout(() => row.classList.remove('table-warning'), 1400);
+    }
+
+    function selectEmployeeSuggestion(userId) {
+        const selectedUser = latestAnalyticsStats.find(user => String(user.id) === String(userId));
+        const { input } = getSearchElements();
+        if (!selectedUser || !input) return;
+        const displayId = selectedUser.staff_code || selectedUser.id;
+        input.value = `${selectedUser.name} ${displayId}`;
+        hideEmployeeSuggestions();
+        applyEmployeeTableSearch();
+        focusEmployeeRow(selectedUser.id);
+    }
+
+    function setupEmployeeSearch() {
+        const { input, clearBtn, suggestions } = getSearchElements();
+        if (!input || !clearBtn || !suggestions) return;
+
+        input.addEventListener('input', () => {
+            activeSuggestionIndex = -1;
+            applyEmployeeTableSearch();
+            renderEmployeeSuggestions(input.value);
+        });
+
+        input.addEventListener('focus', () => renderEmployeeSuggestions(input.value));
+
+        input.addEventListener('keydown', (event) => {
+            const items = Array.from(suggestions.querySelectorAll('.employee-search-suggestion'));
+            if (!items.length) return;
+
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                activeSuggestionIndex = (activeSuggestionIndex + 1) % items.length;
+                renderEmployeeSuggestions(input.value);
+                return;
+            }
+            if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                activeSuggestionIndex = (activeSuggestionIndex - 1 + items.length) % items.length;
+                renderEmployeeSuggestions(input.value);
+                return;
+            }
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                const target = items[activeSuggestionIndex] || items[0];
+                if (target) selectEmployeeSuggestion(target.dataset.userId);
+            }
+            if (event.key === 'Escape') {
+                hideEmployeeSuggestions();
+            }
+        });
+
+        clearBtn.addEventListener('click', () => {
+            input.value = '';
+            activeSuggestionIndex = -1;
+            hideEmployeeSuggestions();
+            applyEmployeeTableSearch();
+            input.focus();
+        });
+
+        suggestions.addEventListener('click', (event) => {
+            const button = event.target.closest('.employee-search-suggestion');
+            if (!button) return;
+            selectEmployeeSuggestion(button.dataset.userId);
+        });
+
+        document.addEventListener('click', (event) => {
+            if (!event.target.closest('.employee-search-wrap')) {
+                hideEmployeeSuggestions();
+            }
+        });
+    }
+
+    function toggleSection(sectionId) {
+        const content = document.getElementById(sectionId + '-content');
+        const chevron = document.getElementById(sectionId + '-chevron');
+        const header = chevron.closest('.card-header-collapsible');
+        
+        content.classList.toggle('collapsed');
+        header.classList.toggle('collapsed');
+        
+        // Accessibility
+        const isCollapsed = content.classList.contains('collapsed');
+        header.setAttribute('aria-expanded', !isCollapsed);
+
+        // If we are expanding the user status section, we might need to refresh the table if it's empty
+        if (sectionId === 'user-status-section' && !isCollapsed) {
+            const tbody = document.querySelector('#analytics-table tbody');
+            if (tbody.children.length <= 1 && tbody.textContent.includes('Loading')) {
+                fetchAnalytics();
+            }
+        }
+
+        // If we are expanding the weekly trends section, re-render the chart
+        if (sectionId === 'weekly-trends-section' && !isCollapsed) {
+            setTimeout(() => {
+                if (window.lastTrends) {
+                    renderD3Chart(window.lastTrends);
+                } else {
+                    fetchAnalytics(); // This will trigger renderD3Chart
+                }
+            }, 450); // Wait for collapse animation
+        }
+    }
+
+    // Initialize accessibility attributes
+    document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('.card-header-collapsible').forEach(header => {
+            header.setAttribute('role', 'button');
+            header.setAttribute('tabindex', '0');
+            header.setAttribute('aria-expanded', 'true');
+            
+            // Keyboard navigation
+            header.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    header.click();
+                }
+            });
+        });
+        
+        // Initial fetch
+        setupEmployeeSearch();
+        fetchAnalytics();
+        setInterval(fetchAnalytics, ADMIN_ANALYTICS_REFRESH_MS);
+        window.addEventListener('online', fetchAnalytics);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                fetchAnalytics();
+            }
+        });
+    });
+
+    // Fetch and Populate Table
+    function fetchAnalytics() {
+        // Show loading state in chart
+        const chartDiv = document.getElementById('attendance-d3-chart');
+        if (chartDiv && !chartDiv.innerHTML.trim()) {
+            chartDiv.innerHTML = '<div class="h-100 d-flex align-items-center justify-content-center text-muted small"><div class="spinner-border spinner-border-sm me-2"></div>Loading trends...</div>';
+        }
+
+        fetch('/analytics')
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(err => { throw err; });
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.status === 'error') {
+                    throw data;
+                }
+                const tbody = document.querySelector('#analytics-table tbody');
+                tbody.innerHTML = '';
+                latestAnalyticsStats = Array.isArray(data.stats) ? data.stats : [];
+                
+                let totalUsers = 0, totalPresent = 0, totalTardy = 0, totalAbsent = 0;
+
+                data.stats.forEach(user => {
+                    totalUsers++;
+                    totalPresent += (user.present || 0);
+                    totalTardy += (user.tardy || 0);
+                    totalAbsent += (user.absent || 0);
+
+                    const tr = document.createElement('tr');
+                    const displayId = user.staff_code || user.id;
+                    tr.setAttribute('data-user-id', String(user.id));
+                    tr.setAttribute('data-search', buildUserSearchText(user));
+                    tr.innerHTML = `
+                        <td class="ps-4 text-muted">${displayId}</td>
+                        <td class="fw-bold">${user.name}</td>
+                        <td><span class="text-muted small">${user.employment_type || 'Full-time'}</span></td>
+                        <td class="text-center"><span class="fw-bold">${user.present || 0}</span></td>
+                        <td class="text-center"><span class="text-warning fw-bold">${user.tardy || 0}</span></td>
+                        <td class="text-center"><span class="text-danger fw-bold">${user.absent || 0}</span></td>
+                        <td class="text-end pe-4">
+                            <div class="btn-group btn-group-sm">
+                                <a href="/edit_user/${user.id}" class="btn btn-sm btn-outline-primary border-0" title="Edit Profile"><i class="bi bi-pencil"></i></a>
+                                <a href="/generate_report_form/${user.id}" class="btn btn-sm btn-outline border-0" title="Report"><i class="bi bi-file-earmark-text"></i></a>
+                                <button class="btn btn-sm btn-outline border-0" onclick="confirmDelete(${user.id}, '${user.name}')" title="Delete"><i class="bi bi-trash"></i></button>
+                            </div>
+                        </td>
+                    `;
+                    tbody.innerHTML += tr.outerHTML;
+                });
+
+                applyEmployeeTableSearch();
+                const { input } = getSearchElements();
+                renderEmployeeSuggestions(input ? input.value : '');
+
+                document.getElementById('total-users-count').textContent = totalUsers;
+                document.getElementById('total-tardy-count').textContent = totalTardy;
+                document.getElementById('total-absent-count').textContent = totalAbsent;
+
+                // Render D3 Chart
+                if (data.trends && data.trends.labels && data.trends.labels.length > 0) {
+                    renderD3Chart(data.trends);
+                } else if (window.lastTrends) {
+                    renderD3Chart(window.lastTrends);
+                } else {
+                    chartDiv.innerHTML = '<div class="h-100 d-flex align-items-center justify-content-center text-muted small">No weekly data available yet.</div>';
+                }
+            })
+            .catch(err => {
+                console.error("Failed to fetch analytics:", err);
+                const msg = err.message || "Failed to load trends.";
+                chartDiv.innerHTML = `<div class="h-100 d-flex align-items-center justify-content-center text-danger small flex-column">
+                    <div>${msg}</div>
+                    ${err.traceback ? `<pre class="mt-2 x-small text-muted" style="max-height: 100px; overflow: auto; max-width: 100%;">${err.traceback}</pre>` : ''}
+                </div>`;
+            });
+    }
+
+    // Live Status Poller
+    function fetchLiveStatus() {
+        fetch('/api/live-status')
+            .then(response => {
+                if (!response.ok) throw new Error('Network response was not ok');
+                return response.json();
+            })
+            .then(data => {
+                if (data.status === 'success') {
+                    const presentCountEl = document.getElementById('total-present-count');
+                    presentCountEl.style.opacity = 1;
+                    if (presentCountEl.textContent !== data.present_count.toString()) {
+                        presentCountEl.textContent = data.present_count;
+                        // Optional: Add a subtle animation on change
+                        presentCountEl.classList.add('animate-pulse');
+                        setTimeout(() => presentCountEl.classList.remove('animate-pulse'), 1000);
+                    }
+                }
+            })
+            .catch(error => {
+                console.warn('Could not fetch live status:', error);
+                // Optionally, show a small indicator that the live count is stale
+                const presentCountEl = document.getElementById('total-present-count');
+                presentCountEl.style.opacity = 0.6;
+            });
+    }
+
+    // Initial call and then poll every 5 seconds
+    fetchLiveStatus();
+    setInterval(fetchLiveStatus, 5000);
+
+    // Initial check for chart container visibility
+    function checkChartVisibility() {
+        const chartDiv = document.getElementById('attendance-d3-chart');
+        if (chartDiv && chartDiv.offsetParent !== null) {
+            // Container is visible, we can safely render or resize
+            return true;
+        }
+        return false;
+    }
+
+    function renderD3Chart(trends) {
+        if (!trends) return;
+        
+        // If chart is not visible (collapsed), wait or skip
+        if (!checkChartVisibility()) {
+            console.log("Chart container not visible, skipping render");
+            // Store trends for later when expanded
+            window.lastTrends = trends;
+            return;
+        }
+
+        console.log("Rendering Chart with Trends:", trends);
+        
+        // Ensure trends arrays exist to avoid "not iterable" errors
+        const labels = trends.labels || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        const present = trends.present || new Array(labels.length).fill(0);
+        const tardy = trends.tardy || trends.late || new Array(labels.length).fill(0);
+        const absent = trends.absent || new Array(labels.length).fill(0);
+
+        d3.select("#attendance-d3-chart").selectAll("*").remove();
+        const margin = {top: 40, right: 30, bottom: 40, left: 40};
+        const chartDiv = document.getElementById('attendance-d3-chart');
+        const width = chartDiv.clientWidth - margin.left - margin.right;
+        const height = 300 - margin.top - margin.bottom;
+
+        if (width <= 0) {
+            console.warn("Chart container width is 0, retrying in 100ms...");
+            setTimeout(() => renderD3Chart(trends), 100);
+            return;
+        }
+
+        const svg = d3.select("#attendance-d3-chart")
+            .append("svg")
+            .attr("width", width + margin.left + margin.right)
+            .attr("height", height + margin.top + margin.bottom)
+            .append("g")
+            .attr("transform", `translate(${margin.left},${margin.top})`);
+
+        // X Axis
+        const x = d3.scaleBand()
+            .range([0, width])
+            .domain(labels)
+            .padding(0.4);
+
+        svg.append("g")
+            .attr("transform", `translate(0,${height})`)
+            .call(d3.axisBottom(x).tickSize(0).tickPadding(10))
+            .call(g => g.select(".domain").remove())
+            .selectAll("text")
+            .attr("class", "axis-label");
+
+        // Y Axis
+        const maxVal = Math.max(...present, ...tardy, ...absent, 5);
+        const y = d3.scaleLinear()
+            .domain([0, maxVal])
+            .range([height, 0]);
+
+        svg.append("g")
+            .call(d3.axisLeft(y).ticks(5).tickSize(-width).tickPadding(10))
+            .call(g => g.select(".domain").remove())
+            .call(g => g.selectAll(".tick line").attr("stroke", "#f0f0f0"))
+            .selectAll("text")
+            .attr("class", "axis-label");
+
+        // Prepare stacked data
+        const stackedData = labels.map((label, i) => ({
+            label: label,
+            present: present[i] || 0,
+            tardy: tardy[i] || 0,
+            absent: absent[i] || 0
+        }));
+
+        const stack = d3.stack()
+            .keys(["present", "tardy", "absent"]);
+
+        const series = stack(stackedData);
+        const color = d3.scaleOrdinal()
+            .domain(["present", "tardy", "absent"])
+            .range(["#198754", "#ffc107", "#dc3545"]); // bs-success, bs-warning, bs-danger
+
+        // Draw Bars
+        svg.selectAll(".serie")
+            .data(series)
+            .enter().append("g")
+            .attr("class", "serie")
+            .attr("fill", d => color(d.key))
+            .selectAll("rect")
+            .data(d => d)
+            .enter().append("rect")
+            .attr("x", d => x(d.data.label))
+            .attr("y", d => y(d[1]))
+            .attr("height", d => y(d[0]) - y(d[1]))
+            .attr("width", x.bandwidth());
+
+        // Add Labels
+        svg.selectAll(".label-group")
+            .data(stackedData)
+            .enter().append("g")
+            .attr("class", "label-group")
+            .attr("transform", d => `translate(${x(d.label) + x.bandwidth()/2}, 0)`)
+            .each(function(d) {
+                const group = d3.select(this);
+                let currentY = y(d.present + d.tardy + d.absent) - 10;
+                const total = d.present + d.tardy + d.absent;
+                if (total > 0) {
+                    group.append("text")
+                        .text(total)
+                        .attr("y", currentY)
+                        .attr("text-anchor", "middle")
+                        .attr("font-size", "12px")
+                        .attr("font-weight", "bold")
+                        .attr("fill", "#333");
+                }
+            });
+    }
+
+    function confirmDelete(id, name) {
+        if (confirm(`Are you sure you want to delete ${name}? This will remove all their logs and face data.`)) {
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = `/delete_user/${id}`;
+            document.body.appendChild(form);
+            form.submit();
+        }
+    }
+</script>
+{% endblock %}

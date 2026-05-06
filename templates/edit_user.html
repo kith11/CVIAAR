@@ -1,0 +1,65 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-6">
+        <div class="card shadow">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">Edit User Profile</h4>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="/update_user/{{ user.id }}">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Full Name</label>
+                        <input type="text" name="name" class="form-control" value="{{ user.name }}" required>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Gmail Address</label>
+                        <input type="email" name="email" class="form-control" value="{{ user.email or '' }}" required placeholder="name@gmail.com">
+                        <div class="form-text">Must be a valid Gmail address for report notifications</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Staff Code</label>
+                        <input type="text" class="form-control" value="{{ user.staff_code }}" disabled>
+                        <div class="form-text">Staff code cannot be changed</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Employment Type</label>
+                        <select name="employment_type" class="form-select" required>
+                            <option value="Full-time" {% if user.employment_type == 'Full-time' %}selected{% endif %}>Full-time</option>
+                            <option value="Part-time" {% if user.employment_type == 'Part-time' %}selected{% endif %}>Part-time</option>
+                            <option value="Contractor" {% if user.employment_type == 'Contractor' %}selected{% endif %}>Contractor</option>
+                        </select>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Schedule Start Time</label>
+                        <input type="time" name="schedule_start" class="form-control" value="{{ user.schedule_start or '06:00' }}">
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Schedule End Time</label>
+                        <input type="time" name="schedule_end" class="form-control" value="{{ user.schedule_end or '19:00' }}">
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Role</label>
+                        <select name="role" class="form-select" required>
+                            <option value="staff" {% if user.role == 'staff' %}selected{% endif %}>Staff</option>
+                            <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Admin</option>
+                        </select>
+                    </div>
+                    
+                    <div class="d-flex justify-content-between">
+                        <a href="/admin" class="btn btn-secondary">Cancel</a>
+                        <button type="submit" class="btn btn-primary">Update Profile</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

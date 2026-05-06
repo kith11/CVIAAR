@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "cviaar-analytics",
+    "cviaar-vision",
+]
+resolver = "2"

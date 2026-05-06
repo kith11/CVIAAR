@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CVI-Attendance</title>
+    <link href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.css') }}" rel="stylesheet">
+    {# Chart/Plotly/D3 are only needed on analytics-style pages; loading them globally blocks the kiosk on slow/offline networks. #}
+    {% block extra_vendor_scripts %}{% endblock %}
+    <style>
+        :root {
+            --bg-color: #f8f9fc;
+            --text-main: #2d3436;
+            --text-muted: #636e72;
+            --accent: #4e73df;
+            --border-color: #e3e6f0;
+            --card-bg: #ffffff;
+            --sidebar-width: 260px;
+            --primary: #4e73df;
+            --secondary: #858796;
+            --success: #1cc88a;
+            --info: #36b9cc;
+            --warning: #f6c23e;
+            --danger: #e74a3b;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 0.9rem;
+            letter-spacing: -0.01em;
+            margin: 0;
+            display: flex;
+            min-height: 100vh;
+            flex-direction: column;
+        }
+
+        @media (min-width: 992px) {
+            body {
+                flex-direction: row;
+            }
+        }
+
+        /* Minimal Sidebar & Mobile Header */
+        .sidebar {
+            width: 100%;
+            border-right: none;
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 1.5rem;
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            height: auto;
+            background: var(--bg-color);
+            z-index: 1000;
+        }
+
+        @media (min-width: 992px) {
+            .sidebar {
+                width: var(--sidebar-width);
+                border-right: 1px solid var(--border-color);
+                border-bottom: none;
+                padding: 2rem 1.5rem;
+                flex-direction: column;
+                align-items: stretch;
+                justify-content: flex-start;
+                position: fixed;
+                height: 100vh;
+            }
+        }
+
+        .sidebar-brand {
+            font-weight: 700;
+            font-size: 1.2rem;
+            margin-bottom: 0;
+            display: flex;
+            align-items: center;
+            color: var(--text-main);
+            text-decoration: none;
+        }
+
+        @media (min-width: 992px) {
+            .sidebar-brand {
+                margin-bottom: 3rem;
+            }
+        }
+
+        .sidebar-toggle {
+            display: block;
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            color: var(--text-main);
+        }
+
+        @media (min-width: 992px) {
+            .sidebar-toggle {
+                display: none;
+            }
+        }
+
+        .nav-container {
+            display: none;
+            flex-direction: column;
+            width: 100%;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: var(--bg-color);
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .nav-container.show {
+            display: flex;
+        }
+
+        @media (min-width: 992px) {
+            .nav-container {
+                display: flex;
+                position: static;
+                padding: 0;
+                border-bottom: none;
+                height: 100%;
+            }
+        }
+
+        .nav-link {
+            color: var(--text-muted);
+            padding: 0.8rem 0;
+            font-weight: 500;
+            transition: color 0.2s;
+            display: flex;
+            align-items: center;
+            border: none;
+            background: none;
+            text-decoration: none;
+        }
+
+        .nav-link:hover, .nav-link.active {
+            color: var(--text-main);
+        }
+
+        .nav-link i {
+            margin-right: 12px;
+            font-size: 1.1rem;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            margin-left: 0;
+            padding: 1rem;
+            max-width: 100%;
+        }
+
+        @media (min-width: 992px) {
+            .main-content {
+                margin-left: var(--sidebar-width);
+                padding: 1.5rem 2rem;
+                max-width: calc(100% - var(--sidebar-width));
+            }
+        }
+
+        .section-title {
+            font-weight: 700;
+            font-size: 1.5rem;
+            margin-bottom: 0.25rem;
+        }
+
+        @media (min-width: 992px) {
+            .section-title {
+                font-size: 1.75rem;
+            }
+        }
+
+        .section-desc {
+            color: var(--text-muted);
+            margin-bottom: 1.5rem;
+            font-size: 0.85rem;
+        }
+
+        /* Compact Professional Cards */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            box-shadow: none;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            transition: border-color 0.2s;
+        }
+
+        .card:hover {
+            border-color: #d1d4e0;
+        }
+
+        .card-header-collapsible {
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 1rem;
+            background: #fff;
+            border-bottom: 1px solid var(--border-color);
+            border-radius: 6px 6px 0 0;
+            transition: background 0.2s;
+        }
+
+        .card-header-collapsible:hover {
+            background: #f8f9fc;
+        }
+
+        .card-header-collapsible .chevron {
+            transition: transform 0.3s ease;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .card-header-collapsible.collapsed .chevron {
+            transform: rotate(-90deg);
+        }
+
+        .collapse-content {
+            max-height: 2000px;
+            overflow: hidden;
+            transition: max-height 0.4s ease-out, opacity 0.3s ease;
+            opacity: 1;
+        }
+
+        .collapse-content.collapsed {
+            max-height: 0;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .card-title {
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin-bottom: 1rem;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+        }
+
+        /* Compact Tables */
+        .table {
+            font-size: 0.85rem;
+        }
+
+        .table th {
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.02em;
+            padding: 0.75rem 0.5rem;
+            border-top: none;
+        }
+
+        .table td {
+            padding: 0.6rem 0.5rem;
+            vertical-align: middle;
+            border-bottom: 1px solid #f1f3f9;
+        }
+
+        /* Compact Badges */
+        .badge {
+            font-weight: 500;
+            padding: 0.35em 0.65em;
+            font-size: 0.75rem;
+            border-radius: 4px;
+        }
+
+        .card-title {
+            font-weight: 600;
+            font-size: 1rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+        }
+
+        /* Buttons */
+        .btn {
+            border-radius: 6px;
+            padding: 0.6rem 1.2rem;
+            font-weight: 500;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            border: 1px solid var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #333;
+            border-color: #333;
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+        }
+
+        .btn-outline:hover {
+            border-color: var(--accent);
+            background: transparent;
+            color: var(--accent);
+        }
+
+        /* Form Inputs */
+        .form-control, .form-select {
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 0.7rem;
+            font-size: 0.9rem;
+            background: #fafafa;
+        }
+
+        .form-control:focus {
+            background: #fff;
+            border-color: var(--accent);
+            box-shadow: none;
+        }
+
+        /* Tables */
+        .table {
+            font-size: 0.9rem;
+        }
+
+        .table thead th {
+            font-weight: 600;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 0.5rem;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.05em;
+        }
+
+        .table td {
+            padding: 1rem 0.5rem;
+            vertical-align: middle;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        /* Badge */
+        .badge {
+            font-weight: 500;
+            padding: 0.4em 0.8em;
+            border-radius: 4px;
+        }
+
+        /* D3 Chart Styles */
+        .d3-chart {
+            width: 100%;
+            height: 300px;
+        }
+        .bar { fill: var(--accent); }
+        .bar:hover { fill: #555; }
+        .axis-label { font-size: 10px; fill: var(--text-muted); }
+        .grid line { stroke: var(--border-color); stroke-opacity: 0.7; shape-rendering: crispEdges; }
+        .grid path { stroke-width: 0; }
+
+        /* AI Chatbot Widget - Professional Overhaul */
+        #chatbot-widget {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            z-index: 1000;
+        }
+
+        #chatbot-toggle {
+            width: 50px;
+            height: 50px;
+            background: var(--accent);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        #chatbot-window {
+            position: absolute;
+            bottom: 70px;
+            right: 0;
+            width: 380px;
+            height: 550px;
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 12px 32px rgba(0,0,0,0.15);
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="d-flex align-items-center justify-content-between w-100 d-lg-block">
+            <a class="sidebar-brand" href="/">
+                <i class="bi bi-journal-text"></i>
+                CVIAAR
+            </a>
+            <button class="sidebar-toggle d-lg-none" id="sidebar-toggle">
+                <i class="bi bi-list"></i>
+            </button>
+        </div>
+        
+        <div class="nav-container" id="nav-container">
+            <nav class="flex-column">
+                <a class="nav-link {{ 'active' if request.path == '/' }}" href="/">
+                    <i class="bi bi-camera-video"></i>
+                    Monitor
+                </a>
+                <a class="nav-link {{ 'active' if request.path == '/admin' }}" href="/admin">
+                    <i class="bi bi-grid-1x2"></i>
+                    Dashboard
+                </a>
+                <a class="nav-link {{ 'active' if request.path == '/advanced_analytics' }}" href="/advanced_analytics">
+                    <i class="bi bi-graph-up"></i>
+                    Analytics
+                </a>
+                <a class="nav-link {{ 'active' if request.path == '/audit_logs' }}" href="/audit_logs">
+                    <i class="bi bi-shield-check"></i>
+                    Audit Logs
+                </a>
+                <a class="nav-link {{ 'active' if request.path == '/staff_portal' }}" href="/staff_portal">
+                    <i class="bi bi-person-badge"></i>
+                    Staff Portal
+                </a>
+            </nav>
+            {% if request.session.get('role') in ['admin', 'staff'] %}
+            <div class="mt-auto">
+                <a class="nav-link" href="{{ '/staff_logout' if request.session.get('role') == 'staff' else '/logout' }}">
+                    <i class="bi bi-box-arrow-right"></i>
+                    Sign Out
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="main-content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category if category != 'error' else 'danger' }} border-0 rounded-3 mb-4">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
+        {% block content %}{% endblock %}
+    </div>
+
+    <!-- AI Chatbot Widget -->
+    <div id="chatbot-widget">
+        <button id="chatbot-toggle">
+            <i class="bi bi-chat-dots"></i>
+        </button>
+        <div id="chatbot-window" style="display: none;">
+            <div class="p-3 border-bottom d-flex justify-content-between align-items-center bg-light">
+                <h6 class="mb-0 fw-bold">AI Assistant</h6>
+                <button class="btn btn-sm btn-outline border-0" onclick="toggleChatbot()">
+                    <i class="bi bi-dash-lg"></i>
+                </button>
+            </div>
+            <div id="chatbot-messages" class="flex-grow-1 p-3 overflow-auto" style="font-size: 0.85rem;"></div>
+            <div class="p-3 border-top">
+                <div class="input-group">
+                    <input type="text" id="chatbot-input" class="form-control" placeholder="Ask a question...">
+                    <button class="btn btn-primary" onclick="sendMessage()">
+                        <i class="bi bi-send"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
+    <script>
+        // Sidebar Toggle for Mobile
+        const sidebarToggle = document.getElementById('sidebar-toggle');
+        const navContainer = document.getElementById('nav-container');
+        if (sidebarToggle) {
+            sidebarToggle.addEventListener('click', () => {
+                navContainer.classList.toggle('show');
+            });
+        }
+
+        // Chatbot Logic
+        function toggleChatbot() {
+            const window = document.getElementById('chatbot-window');
+            window.style.display = window.style.display === 'none' ? 'flex' : 'none';
+        }
+        document.getElementById('chatbot-toggle').addEventListener('click', toggleChatbot);
+
+        async function sendMessage() {
+            const input = document.getElementById('chatbot-input');
+            const messages = document.getElementById('chatbot-messages');
+            const query = input.value.trim();
+            if (!query) return;
+
+            // Add user message
+            messages.innerHTML += `<div class="mb-3 text-end"><span class="bg-primary text-white p-2 rounded-3 d-inline-block">${query}</span></div>`;
+            input.value = '';
+            messages.scrollTop = messages.scrollHeight;
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query })
+                });
+                const data = await response.json();
+                messages.innerHTML += `<div class="mb-3"><span class="bg-light p-2 rounded-3 d-inline-block">${data.response}</span></div>`;
+                messages.scrollTop = messages.scrollHeight;
+            } catch (err) {
+                console.error('Chat error:', err);
+            }
+        }
+    </script>
+</body>
+</html>

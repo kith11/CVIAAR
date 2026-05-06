@@ -1,0 +1,43 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="mb-5">
+    <h1 class="section-title">Activity Log</h1>
+    <p class="section-desc">Review recent admin and system actions such as user changes, face resets, model retraining, and report requests.</p>
+</div>
+
+<div class="card p-0 overflow-hidden">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th class="ps-4">Time</th>
+                    <th>Actor</th>
+                    <th>Action</th>
+                    <th>Target</th>
+                    <th class="pe-4">Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for event in events %}
+                <tr>
+                    <td class="ps-4 text-muted small">{{ event.timestamp.strftime('%Y-%m-%d %H:%M:%S') if event.timestamp else '' }}</td>
+                    <td><span class="text-muted">{{ event.actor }}</span></td>
+                    <td>
+                        <span class="badge {{ 'bg-light text-dark border' if event.kind == 'legacy' else 'bg-primary' }}">
+                            {{ event.action }}
+                        </span>
+                    </td>
+                    <td>
+                        <div class="fw-bold">{{ event.target }}</div>
+                    </td>
+                    <td class="pe-4 small">{{ event.details }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-center py-5 text-muted">No activity has been recorded yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
