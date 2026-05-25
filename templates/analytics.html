@@ -1,787 +1,486 @@
 {% extends "layout.html" %}
 
 {% block extra_vendor_scripts %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 {% endblock %}
 
 {% block content %}
 <style>
     :root {
-        --analytics-bg: #f5f5f2;
-        --panel-bg: #ffffff;
-        --panel-muted: #faf9f6;
-        --panel-border: #d9d5cd;
-        --text-strong: #1f2933;
-        --text-soft: #667085;
-        --accent-green: #2f6f5e;
-        --accent-amber: #a56a1e;
-        --accent-red: #a44545;
-        --accent-blue: #35617a;
+        --dash-bg: #ececec;
+        --card-bg: #ffffff;
+        --card-border: #e2e2e2;
+        --text-strong: #1f2937;
+        --text-soft: #6b7280;
     }
 
-    .analytics-container {
-        max-width: 100%;
-        margin: 0;
-        color: var(--text-strong);
+    .analytics-dashboard {
+        background: var(--dash-bg);
+        margin: -1rem -0.75rem 0;
+        padding: 1.25rem 1.5rem 2rem;
+        min-height: calc(100vh - 56px);
     }
 
-    .chart-card {
-        border: 1px solid var(--panel-border);
-        background: var(--panel-bg);
-        border-radius: 14px;
-        padding: 1.25rem !important;
-        box-shadow: none;
-    }
+    .dash-header h1 { font-size: 1.35rem; font-weight: 700; margin: 0; }
+    .dash-header .refresh-meta { font-size: 0.8rem; color: var(--text-soft); }
 
-    .insight-item {
-        border: 1px solid var(--panel-border);
-        border-radius: 12px;
-        background: var(--panel-bg);
-        padding: 1rem;
-        margin-bottom: 0;
-    }
-
-    .drill-down-active {
-        cursor: pointer;
-    }
-
-    .stat-value {
-        font-size: 1.5rem;
-        font-weight: 700;
-        letter-spacing: -0.01em;
-    }
-
-    .x-small {
-        font-size: 0.7rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        font-weight: 600;
-    }
-
-    .filter-card {
-        background: var(--panel-bg);
-        border: 1px solid var(--panel-border);
-        border-radius: 14px !important;
-        margin-bottom: 1.5rem;
+    .dash-card {
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-radius: 4px;
         padding: 1rem 1.1rem;
-    }
-
-    .summary-card {
-        border: 1px solid var(--panel-border);
-        border-radius: 14px;
-        background: var(--panel-bg);
-        padding: 1.1rem;
         height: 100%;
     }
 
-    .summary-label {
+    .filter-block label {
         font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
+        font-weight: 600;
         color: var(--text-soft);
-        font-weight: 700;
+        margin-bottom: 0.25rem;
     }
 
-    .summary-help {
-        font-size: 0.8rem;
-        color: var(--text-soft);
-        line-height: 1.45;
-    }
+    .kpi-card { min-height: 88px; }
+    .kpi-title { font-size: 0.78rem; font-weight: 600; color: var(--text-soft); margin-bottom: 0.35rem; }
+    .kpi-value { font-size: 1.65rem; font-weight: 700; line-height: 1.2; }
+    .kpi-sub { font-size: 0.95rem; font-weight: 600; }
+    .kpi-hint { font-size: 0.68rem; color: var(--text-soft); margin-top: 0.2rem; }
+    .kpi-split { display: flex; gap: 1rem; align-items: baseline; }
 
-    .page-actions .btn,
-    .filter-card .btn,
-    .filter-card .form-control,
-    .filter-card .form-select {
-        border-radius: 10px;
-    }
-
-    .page-actions .btn {
-        border-color: var(--panel-border);
-        background: var(--panel-bg);
-        color: var(--text-strong);
-    }
-
-    .page-actions .btn:hover {
-        background: var(--panel-muted);
-    }
-
-    .filter-card .form-control,
-    .filter-card .form-select,
-    .filter-card .btn-outline-light {
-        background: var(--panel-muted) !important;
-        border: 1px solid transparent !important;
-        color: var(--text-strong);
-    }
-
-    .filter-card .btn-primary {
-        background: var(--text-strong);
-        border-color: var(--text-strong);
-    }
-
-    .panel-title {
-        font-size: 1rem;
-        font-weight: 700;
-        letter-spacing: -0.01em;
-        margin-bottom: 0.2rem;
-    }
-
-    .panel-copy {
-        color: var(--text-soft);
-        font-size: 0.88rem;
-        margin-bottom: 0;
-    }
-
-    .summary-shell {
-        border: 1px solid var(--panel-border);
-        background: var(--panel-muted);
-        border-radius: 14px;
-    }
-
-    .table-shell {
-        border: 1px solid var(--panel-border);
-        border-radius: 14px;
-        overflow: hidden;
-        background: var(--panel-bg);
-    }
-
-    .table-shell .card-header,
-    .offcanvas-header {
-        background: var(--panel-muted) !important;
-        color: var(--text-strong) !important;
-        border-bottom: 1px solid var(--panel-border);
-    }
-
-    .table-shell thead tr {
-        background: var(--panel-muted) !important;
-    }
-
-    .table-shell tbody tr:hover {
-        background: #fbfbf9;
-    }
-
-    .score-track {
-        width: 100%;
-        height: 6px;
-        background: #ece8e1;
-        border-radius: 999px;
-        overflow: hidden;
-    }
-
-    .score-fill {
-        height: 100%;
-        border-radius: 999px;
-    }
-
-    .score-fill.on-time {
-        background: var(--accent-green);
-    }
-
-    .score-fill.attendance {
-        background: var(--accent-blue);
-    }
-
-    .tone-chip {
-        display: inline-flex;
-        align-items: center;
-        padding: 0.25rem 0.6rem;
-        border-radius: 999px;
-        font-size: 0.75rem;
-        font-weight: 700;
-        border: 1px solid var(--panel-border);
-        background: var(--panel-bg);
-        color: var(--text-strong);
-    }
-
-    .tone-chip.warning {
-        color: var(--accent-amber);
-        border-color: #e5cfaa;
-        background: #fbf6eb;
-    }
-
-    .tone-chip.danger {
-        color: var(--accent-red);
-        border-color: #e5c2c2;
-        background: #fbefef;
-    }
-
-    .detail-note {
-        border: 1px solid var(--panel-border);
-        background: var(--panel-muted);
-        border-radius: 14px;
-        padding: 1rem;
-    }
-
-    .attention-list {
-        display: grid;
-        gap: 0.9rem;
-    }
+    .chart-title { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.15rem; }
+    .chart-subtitle { font-size: 0.78rem; color: var(--text-soft); margin-bottom: 0.75rem; }
+    .chart-plot { min-height: 260px; }
+    .heatmap-plot { min-height: 340px; }
 
     .attention-item {
-        border: 1px solid var(--panel-border);
-        border-radius: 14px;
-        background: var(--panel-bg);
-        padding: 1rem 1.1rem;
-        transition: background 0.2s ease, border-color 0.2s ease;
+        border: 1px solid var(--card-border);
+        border-radius: 4px;
+        background: var(--card-bg);
+        padding: 0.9rem 1rem;
+        width: 100%;
+        text-align: left;
+        cursor: pointer;
     }
+    .attention-item:hover { background: #f9fafb; }
 
-    .attention-item:hover {
-        background: #fbfbf9;
-        border-color: #cfc9be;
-    }
+    .tone-chip { font-size: 0.72rem; font-weight: 700; padding: 0.2rem 0.55rem; border-radius: 999px; }
+    .tone-chip.warning { background: #fef3c7; color: #92400e; }
+    .tone-chip.danger { background: #fee2e2; color: #991b1b; }
 
-    .attention-name {
-        font-size: 0.98rem;
-        font-weight: 700;
-        line-height: 1.3;
-    }
+    .preset-btn { font-size: 0.75rem; padding: 0.2rem 0.5rem; }
 
-    .attention-reason {
-        color: var(--text-soft);
-        font-size: 0.9rem;
-        line-height: 1.45;
-        margin-top: 0.35rem;
-    }
-
-    .attention-meta {
-        display: flex;
-        gap: 1rem;
-        margin-top: 0.7rem;
-        color: var(--text-soft);
-        font-size: 0.78rem;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        font-weight: 700;
-    }
-
-    .attention-empty {
-        border: 1px dashed var(--panel-border);
-        border-radius: 14px;
-        background: var(--panel-muted);
-        padding: 1.25rem;
-        text-align: center;
-        color: var(--text-soft);
-        font-size: 0.9rem;
-    }
-
-    @media print {
-        .filter-card,
-        .page-actions {
-            display: none !important;
-        }
-    }
+    @media print { .page-actions, .filter-block { display: none !important; } }
 </style>
 
-<div class="analytics-container">
-    <div class="d-flex justify-content-between align-items-center mb-3">
+<div class="analytics-dashboard">
+    <div class="dash-header d-flex justify-content-between align-items-start mb-3">
         <div>
-            <h1 class="section-title">Attendance Overview</h1>
-            <p class="section-desc mb-0">A plain-language summary of attendance, lateness, and absences.</p>
+            <h1>School Staff Attendance Dashboard</h1>
+            <p class="text-muted small mb-0">Private school — punctuality, presence, and daily patterns</p>
         </div>
-        <div class="d-flex gap-2 page-actions">
-            <button class="btn btn-xs btn-outline-secondary" onclick="window.print()">
-                <i class="bi bi-printer me-1"></i>Print
+        <div class="d-flex align-items-center gap-2 page-actions">
+            <span class="refresh-meta" id="refreshMeta">Loading...</span>
+            <button type="button" class="btn btn-sm btn-light border" onclick="loadDashboard()" title="Refresh">
+                <i class="bi bi-arrow-clockwise"></i>
             </button>
-            <a href="{{ url_for('admin') }}" class="btn btn-xs btn-secondary">
-                <i class="bi bi-grid me-1"></i>Dashboard
-            </a>
+            <button type="button" class="btn btn-sm btn-light border" onclick="window.print()">
+                <i class="bi bi-printer"></i>
+            </button>
         </div>
     </div>
 
-    <!-- Minimal Filter Bar -->
-    <div class="card filter-card shadow-none sticky-top" style="top: 60px; z-index: 900;">
-        <form id="filterForm" class="row g-2 align-items-end">
-            <div class="col-md-3">
-                <label class="x-small text-muted mb-1">Date Range</label>
-                <div class="input-group input-group-sm">
-                    <input type="date" id="startDate" class="form-control form-control-sm border-0 bg-light">
-                    <input type="date" id="endDate" class="form-control form-control-sm border-0 bg-light">
+    <div class="row g-3 mb-3 align-items-stretch">
+        <div class="col-lg-2 col-md-4">
+            <div class="dash-card filter-block h-100">
+                <label for="startDate">Date range</label>
+                <input type="date" id="startDate" class="form-control form-control-sm mb-2">
+                <input type="date" id="endDate" class="form-control form-control-sm mb-2">
+                <div class="d-flex gap-1 flex-wrap">
+                    <button type="button" class="btn btn-outline-secondary preset-btn" onclick="setDateRange('week')">7 days</button>
+                    <button type="button" class="btn btn-outline-secondary preset-btn" onclick="setDateRange('month')">This month</button>
                 </div>
             </div>
-            <div class="col-md-2">
-                <label class="x-small text-muted mb-1">Work Type</label>
-                <select id="empType" class="form-select form-select-sm border-0 bg-light">
+        </div>
+        <div class="col-lg-2 col-md-4">
+            <div class="dash-card filter-block h-100">
+                <label for="userFilter">Staff</label>
+                <select id="userFilter" class="form-select form-select-sm">
+                    <option value="All">All staff</option>
+                    {% for u in users %}
+                    <option value="{{ u.id }}">{{ u.name }}</option>
+                    {% endfor %}
+                </select>
+                <label for="empType" class="mt-2">Role type</label>
+                <select id="empType" class="form-select form-select-sm">
                     <option value="All">All</option>
                     <option value="Full-time">Full-time</option>
                     <option value="Part-time">Part-time</option>
                 </select>
             </div>
-            <div class="col-md-3">
-                <label class="x-small text-muted mb-1">Person</label>
-                <select id="userFilter" class="form-select form-select-sm border-0 bg-light">
-                    <option value="All">All Personnel</option>
-                    {% for u in users %}
-                    <option value="{{ u.id }}">{{ u.name }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-md-2">
-                <button type="submit" class="btn btn-sm btn-primary w-100 fw-bold">Apply Filters</button>
-            </div>
-            <div class="col-md-2">
-                <div class="btn-group btn-group-sm w-100">
-                    <button type="button" class="btn btn-outline-light text-muted border-0 bg-light" onclick="setDateRange('week')">7 Days</button>
-                    <button type="button" class="btn btn-outline-light text-muted border-0 bg-light" onclick="setDateRange('month')">This Month</button>
-                </div>
-            </div>
-        </form>
-    </div>
-
-    <div class="row g-3 mb-4" id="summaryCards">
-        <div class="col-md-6 col-xl-3">
-            <div class="summary-card">
-                <div class="summary-label">On-Time Rate</div>
-                <div class="stat-value text-success" id="summaryOnTimeRate">--</div>
-                <div class="summary-help">Share of check-ins that were recorded on time.</div>
-            </div>
         </div>
-        <div class="col-md-6 col-xl-3">
-            <div class="summary-card">
-                <div class="summary-label">Late Logs</div>
-                <div class="stat-value text-warning" id="summaryLateCount">--</div>
-                <div class="summary-help">How many late arrivals were recorded in the selected period.</div>
-            </div>
-        </div>
-        <div class="col-md-6 col-xl-3">
-            <div class="summary-card">
-                <div class="summary-label">Absent Sessions</div>
-                <div class="stat-value text-danger" id="summaryAbsentCount">--</div>
-                <div class="summary-help">Missing morning or afternoon attendance sessions.</div>
-            </div>
-        </div>
-        <div class="col-md-6 col-xl-3">
-            <div class="summary-card">
-                <div class="summary-label">Needs Follow-Up</div>
-                <div class="stat-value text-dark" id="summaryRiskCount">--</div>
-                <div class="summary-help">People whose recent attendance may need a quick review.</div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Plain-language Insights -->
-    <div class="card summary-shell shadow-none mb-4">
-        <div class="card-body p-3">
-            <div class="mb-3">
-                <div class="panel-title">Key Takeaways</div>
-                <p class="panel-copy">Simple notes that explain the main attendance patterns in this period.</p>
-            </div>
-            <div id="narrativeInsights" class="row g-3">
-                <div class="col-12 text-center py-2">
-                    <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="row g-4 mb-5">
-        <!-- Weekly Trends (Plotly) -->
-        <div class="col-lg-8">
-            <div class="card chart-card h-100">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <div>
-                        <div class="panel-title">Attendance by Day</div>
-                        <p class="panel-copy">See which days had more on-time, late, or absent records.</p>
-                        <div id="weeklyComparison" class="x-small text-muted"></div>
-                    </div>
-                    <div class="btn-group btn-group-xs">
-                        <button class="btn btn-outline-secondary py-0" onclick="changeChartType('weekly', 'bar')">Bars</button>
-                        <button class="btn btn-outline-secondary py-0" onclick="changeChartType('weekly', 'line')">Line</button>
+        <div class="col-lg-8 col-md-12">
+            <div class="row g-3 h-100">
+                <div class="col">
+                    <div class="dash-card kpi-card">
+                        <div class="kpi-title">Login</div>
+                        <div class="kpi-split">
+                            <div><span class="kpi-sub" id="kpiLate">--</span> <span class="text-muted small">Late</span></div>
+                            <div><span class="kpi-sub" id="kpiEarly">--</span> <span class="text-muted small">Early</span></div>
+                        </div>
                     </div>
                 </div>
-                <div id="weeklyPlotly" style="height: 300px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px;"></div>
-            </div>
-        </div>
-
-        <!-- Status Composition (Chart.js) -->
-        <div class="col-lg-4">
-            <div class="card chart-card h-100">
-                <div class="panel-title">Attendance Breakdown</div>
-                <p class="panel-copy mb-4">A quick split of on-time, late, and absent records.</p>
-                <div style="height: 280px; position: relative;">
-                    <canvas id="statusChart"></canvas>
-                    <div class="position-absolute top-50 start-50 translate-middle text-center">
-                        <div id="totalLogCount" class="h4 fw-bold mb-0">0</div>
-                        <div class="text-muted x-small text-uppercase">Recorded Logs</div>
+                <div class="col">
+                    <div class="dash-card kpi-card">
+                        <div class="kpi-title">After-hours</div>
+                        <div class="kpi-value" id="kpiOvertime">--</div>
+                        <div class="kpi-hint">Hours past scheduled end</div>
                     </div>
                 </div>
-                <div id="statusLegend" class="mt-4 row g-2"></div>
+                <div class="col">
+                    <div class="dash-card kpi-card">
+                        <div class="kpi-title">Absences</div>
+                        <div class="kpi-value" id="kpiAbsent">--</div>
+                        <div class="kpi-hint">AM/PM absent sessions</div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="dash-card kpi-card">
+                        <div class="kpi-title">Attendance %</div>
+                        <div class="kpi-value" id="kpiAttendance">--</div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="dash-card kpi-card">
+                        <div class="kpi-title">Avg. daily hours</div>
+                        <div class="kpi-value"><span id="kpiWorked">--</span><span class="fs-6"> hrs</span></div>
+                        <div class="kpi-hint">Per staff day (login→logout)</div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- Predictive Risk List -->
-    <div class="card table-shell shadow-none mb-5">
-        <div class="card-header p-4 border-0">
-            <div class="d-flex justify-content-between align-items-center">
-                <div>
-                    <div class="panel-title mb-1">People To Check In With</div>
-                    <p class="panel-copy">A simple list of people who were late or absent more often recently.</p>
-                </div>
+    <div class="row g-3 mb-3">
+        <div class="col-lg-5">
+            <div class="dash-card">
+                <div class="chart-title">Check-in location</div>
+                <div class="chart-subtitle">On-campus kiosk vs other devices — click a bar for details</div>
+                <div id="workingLocationChart" class="chart-plot"></div>
             </div>
         </div>
-        <div class="p-3 p-md-4">
-            <div id="riskList" class="attention-list">
-                <div class="attention-empty">Loading attendance review list...</div>
+        <div class="col-lg-7">
+            <div class="dash-card">
+                <div class="chart-title">Overall attendance</div>
+                <div class="chart-subtitle" id="overallPeriodLabel">Last 6 months</div>
+                <div id="overallAttendanceChart" class="chart-plot"></div>
             </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-lg-7">
+            <div class="dash-card">
+                <div class="chart-title">Attendance statistics</div>
+                <div class="chart-subtitle" id="statsPeriodLabel">Last 6 months — click a month for breakdown</div>
+                <div id="attendanceStatsChart" class="chart-plot"></div>
+            </div>
+        </div>
+        <div class="col-lg-5">
+            <div class="dash-card">
+                <div class="chart-title">Absenteeism rate</div>
+                <div class="chart-subtitle" id="absentPeriodLabel">Last 6 months</div>
+                <div id="absenteeismChart" class="chart-plot"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-12">
+            <div class="dash-card">
+                <div class="chart-title">Check-in activity heatmap</div>
+                <div class="chart-subtitle">Full day — darker cells mean more check-ins (filtered date range)</div>
+                <div id="heatmapChart" class="heatmap-plot"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="dash-card">
+        <div class="chart-title">Staff to follow up with</div>
+        <div class="chart-subtitle mb-3">Based on your selected date range and filters</div>
+        <div id="riskList" class="row g-2">
+            <div class="col-12 text-muted small">Loading...</div>
         </div>
     </div>
 </div>
 
-<!-- Detailed Drill-down Canvas -->
-<div class="offcanvas offcanvas-end border-0 shadow-lg" tabindex="-1" id="drillDownCanvas" style="width: 500px;">
-    <div class="offcanvas-header p-4">
-        <h5 class="offcanvas-title fw-bold" id="drillDownTitle">Attendance Details</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+<div class="offcanvas offcanvas-end" tabindex="-1" id="drillDownCanvas" style="width: 420px;">
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title fw-bold" id="drillDownTitle">Details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
     </div>
-    <div class="offcanvas-body p-4" id="drillDownContent">
-        <!-- Dynamic content goes here -->
-    </div>
+    <div class="offcanvas-body" id="drillDownContent"></div>
 </div>
 
 <script>
     let currentData = null;
-    let chartObjects = {};
-    const ANALYTICS_AUTO_REFRESH_MS = 30000;
+    const PLOT_CONFIG = { responsive: true, displayModeBar: false };
+    const PLOT_LAYOUT_BASE = {
+        margin: { t: 10, b: 40, l: 50, r: 20 },
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'Segoe UI, system-ui, sans-serif', size: 11, color: '#6b7280' },
+    };
 
-    function formatSignedPercent(value) {
-        return `${value >= 0 ? '+' : ''}${Number(value || 0).toFixed(1)}%`;
-    }
-
-    function updateSummaryCards(data) {
-        const present = (data.weekly_trends?.present || []).reduce((sum, value) => sum + value, 0);
-        const late = (data.weekly_trends?.late || []).reduce((sum, value) => sum + value, 0);
-        const absent = (data.weekly_trends?.absent || []).reduce((sum, value) => sum + value, 0);
-        const total = present + late + absent;
-        const onTimeRate = total > 0 ? ((present / total) * 100).toFixed(1) : '0.0';
-
-        document.getElementById('summaryOnTimeRate').textContent = `${onTimeRate}%`;
-        document.getElementById('summaryLateCount').textContent = `${late}`;
-        document.getElementById('summaryAbsentCount').textContent = `${absent}`;
-        document.getElementById('summaryRiskCount').textContent = `${(data.risk_users || []).length}`;
-    }
-
-    document.addEventListener("DOMContentLoaded", function() {
-        // Initialize filters
+    document.addEventListener('DOMContentLoaded', () => {
         const now = new Date();
         document.getElementById('startDate').valueAsDate = new Date(now.getFullYear(), now.getMonth(), 1);
         document.getElementById('endDate').valueAsDate = now;
-
+        ['startDate', 'endDate', 'userFilter', 'empType'].forEach(id => {
+            document.getElementById(id).addEventListener('change', loadDashboard);
+        });
         loadDashboard();
-
-        document.getElementById('filterForm').addEventListener('submit', (e) => {
-            e.preventDefault();
-            loadDashboard();
-        });
-
-        setInterval(loadDashboard, ANALYTICS_AUTO_REFRESH_MS);
-        window.addEventListener('online', loadDashboard);
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-                loadDashboard();
-            }
-        });
+        setInterval(loadDashboard, 30000);
     });
-
-    async function loadDashboard() {
-        const start = document.getElementById('startDate').value;
-        const end = document.getElementById('endDate').value;
-        const type = document.getElementById('empType').value;
-        const user = document.getElementById('userFilter').value;
-
-        // Show loading state
-        const insightsContainer = document.getElementById('narrativeInsights');
-        insightsContainer.innerHTML = `
-            <div class="col-12 text-center py-4">
-                <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
-                <span class="ms-2 small text-muted">Loading attendance summary...</span>
-            </div>
-        `;
-
-        const params = new URLSearchParams({ start_date: start, end_date: end, employment_type: type, user_id: user });
-        
-        const startTime = performance.now();
-        try {
-            const response = await fetch(`/api/advanced_analytics_data?${params.toString()}`);
-            currentData = await response.json();
-            const duration = (performance.now() - startTime).toFixed(0);
-            console.log(`Analytics data loaded in ${duration}ms`);
-            
-            renderWeeklyPlotly(currentData.weekly_trends);
-            renderStatusChart(currentData.status_distribution);
-            renderStrategicRiskTable(currentData.risk_users);
-            renderNarrativeInsights(currentData.insights);
-            updateSummaryCards(currentData);
-            
-            // Update weekly comparison text
-            const comp = currentData.weekly_trends.comparison;
-            const growthColor = comp.growth >= 0 ? 'text-success' : 'text-danger';
-            const engColor = comp.engagement_change >= 0 ? 'text-success' : 'text-danger';
-            document.getElementById('weeklyComparison').innerHTML = `
-                <span class="${growthColor}">${formatSignedPercent(comp.growth)} more total attendance logs</span> than last week |
-                <span class="${engColor}">${formatSignedPercent(comp.engagement_change)} change in on-time attendance</span>
-            `;
-        } catch (err) {
-            console.error("Dashboard engine failure:", err);
-            insightsContainer.innerHTML = '<div class="col-12 text-danger">Could not load the attendance summary.</div>';
-        }
-    }
-
-    function renderNarrativeInsights(insights) {
-        const container = document.getElementById('narrativeInsights');
-        container.innerHTML = '';
-        if (!insights || insights.length === 0) {
-            container.innerHTML = '<div class="col-12 text-muted">No major attendance patterns were detected for the selected period.</div>';
-            return;
-        }
-
-        insights.forEach(text => {
-            const col = document.createElement('div');
-            col.className = 'col-md-6 col-xl-4';
-            col.innerHTML = `
-                <div class="insight-item">
-                    <p class="mb-0 text-dark small fw-medium" style="line-height: 1.6;">${text}</p>
-                </div>
-            `;
-            container.appendChild(col);
-        });
-    }
-
-    function renderWeeklyPlotly(data) {
-        const trace1 = {
-            x: data.labels,
-            y: data.present,
-            name: 'Present',
-            type: currentChartTypes.weekly || 'bar',
-            marker: { color: '#1cc88a', opacity: 0.8, line: { width: 0 } },
-            hovertemplate: '<b>%{x}</b><br>On time: %{y}<br>Share of day: %{customdata}%<extra></extra>',
-            customdata: data.present.map((v, i) => {
-                const total = v + data.late[i] + data.absent[i];
-                return total > 0 ? (v/total*100).toFixed(1) : 0;
-            })
-        };
-
-        const trace2 = {
-            x: data.labels,
-            y: data.late,
-            name: 'Late',
-            type: currentChartTypes.weekly || 'bar',
-            marker: { color: '#f6c23e', opacity: 0.8 },
-            hovertemplate: '<b>%{x}</b><br>Late: %{y}<br>Share of day: %{customdata}%<extra></extra>',
-            customdata: data.late.map((v, i) => {
-                const total = data.present[i] + v + data.absent[i];
-                return total > 0 ? (v/total*100).toFixed(1) : 0;
-            })
-        };
-
-        const trace3 = {
-            x: data.labels,
-            y: data.absent,
-            name: 'Absent',
-            type: currentChartTypes.weekly || 'bar',
-            marker: { color: '#e74a3b', opacity: 0.8 },
-            hovertemplate: '<b>%{x}</b><br>Absent: %{y}<extra></extra>'
-        };
-
-        const layout = {
-            barmode: 'stack',
-            margin: { t: 10, b: 40, l: 40, r: 10 },
-            showlegend: false,
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
-            xaxis: { gridcolor: '#f8f9fa', tickfont: { size: 11, color: '#888' } },
-            yaxis: { gridcolor: '#f8f9fa', tickfont: { size: 11, color: '#888' } },
-            hovermode: 'closest',
-            hoverlabel: { bgcolor: "#111", font: { color: "#fff", size: 12 }, bordercolor: "#111" }
-        };
-
-        Plotly.newPlot('weeklyPlotly', [trace1, trace2, trace3], layout, { responsive: true, displayModeBar: false });
-
-        document.getElementById('weeklyPlotly').on('plotly_click', (data) => {
-            if (!data.points || data.points.length === 0) return;
-            const point = data.points[0];
-            showDeepDive(point.x, currentData.weekly_trends.present[point.pointIndex], currentData.weekly_trends.late[point.pointIndex], currentData.weekly_trends.absent[point.pointIndex]);
-        });
-    }
-
-    let currentChartTypes = { weekly: 'bar' };
-    function changeChartType(chart, type) {
-        currentChartTypes[chart] = type;
-        if (chart === 'weekly') renderWeeklyPlotly(currentData.weekly_trends);
-    }
-
-    function renderStatusChart(data) {
-        if (!data || !data.data || !data.labels) {
-            console.warn("Insufficient data for status chart");
-            return;
-        }
-        
-        const ctx = document.getElementById('statusChart').getContext('2d');
-        if (chartObjects.status) chartObjects.status.destroy();
-
-        const total = data.data.reduce((a, b) => a + b, 0);
-        document.getElementById('totalLogCount').innerText = total;
-
-        chartObjects.status = new Chart(ctx, {
-            type: 'doughnut',
-            data: {
-                labels: data.labels,
-                datasets: [{
-                    data: data.data,
-                    backgroundColor: data.colors || ['#0d6efd', '#6c757d', '#adb5bd', '#343a40', '#dee2e6', '#212529'],
-                    borderWidth: 0,
-                    hoverOffset: 20
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                cutout: '82%',
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        enabled: true,
-                        backgroundColor: '#111',
-                        padding: 12,
-                        callbacks: {
-                            label: (ctx) => {
-                                const pct = total > 0 ? ((ctx.raw / total) * 100).toFixed(1) : 0;
-                                return ` ${ctx.label}: ${ctx.raw} (${pct}%)`;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        const legend = document.getElementById('statusLegend');
-        legend.innerHTML = '';
-        const colors = data.colors || [];
-        data.labels.forEach((l, i) => {
-            const pct = total > 0 ? (data.data[i] / total * 100).toFixed(0) : 0;
-            const color = colors[i] || '#ccc';
-            legend.innerHTML += `
-                <div class="col-6">
-                    <div class="d-flex align-items-center small">
-                        <div class="rounded-circle me-2" style="width:8px; height:8px; background:${color};"></div>
-                        <span class="text-muted text-truncate">${l}</span>
-                        <span class="ms-auto fw-bold">${pct}%</span>
-                    </div>
-                </div>
-            `;
-        });
-    }
-
-    function renderStrategicRiskTable(users) {
-        const list = document.getElementById('riskList');
-        list.innerHTML = '';
-        if (!users || users.length === 0) {
-            list.innerHTML = '<div class="attention-empty">No one currently stands out as needing extra attendance follow-up.</div>';
-            return;
-        }
-
-        users.forEach(u => {
-            const riskColor = u.risk_level === 'High' ? 'danger' : 'warning';
-            const lateRate = Number.parseFloat(u.late_rate || 0) || 0;
-            const absentRate = Number.parseFloat(u.absent_rate || 0) || 0;
-            const riskLabel = u.risk_level === 'High' ? 'Needs attention' : 'Watch closely';
-            const encodedName = JSON.stringify(u.name);
-            let reason = 'Recent attendance needs a quick check-in.';
-
-            if (absentRate >= 15 && lateRate >= 30) {
-                reason = 'Has had several absences and late arrivals recently.';
-            } else if (absentRate >= 15) {
-                reason = 'Has had several absences recently.';
-            } else if (lateRate >= 30) {
-                reason = 'Has been late several times recently.';
-            }
-
-            list.innerHTML += `
-                <button type="button" class="attention-item drill-down-active text-start w-100" onclick='showDeepDive(${encodedName}, 0, 0, 0, true)'>
-                    <div class="d-flex justify-content-between align-items-start gap-3">
-                        <div>
-                            <div class="attention-name">${u.name}</div>
-                            <div class="attention-reason">${reason}</div>
-                        </div>
-                        <span class="tone-chip ${riskColor}">${riskLabel}</span>
-                    </div>
-                    <div class="attention-meta">
-                        <span>Late ${lateRate.toFixed(1)}%</span>
-                        <span>Absent ${absentRate.toFixed(1)}%</span>
-                    </div>
-                </button>
-            `;
-        });
-    }
-
-    function showDeepDive(label, present, late, absent, isUser = false) {
-        const title = document.getElementById('drillDownTitle');
-        const content = document.getElementById('drillDownContent');
-        
-        title.innerText = isUser ? `Attendance summary for ${label}` : `${label} attendance summary`;
-        
-        const total = present + late + absent;
-        const pRate = total > 0 ? ((present / total) * 100).toFixed(1) : 0;
-
-        content.innerHTML = `
-            <div class="mb-5">
-                <h6 class="text-uppercase small fw-bold text-muted mb-3">Quick View</h6>
-                <div class="row g-3">
-                    <div class="col-6">
-                        <div class="summary-card">
-                            <div class="small text-muted mb-1">On-Time Rate</div>
-                            <div class="h4 fw-bold mb-0 text-success">${pRate}%</div>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="summary-card">
-                            <div class="small text-muted mb-1">Total Records</div>
-                            <div class="h4 fw-bold mb-0 text-dark">${total}</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="mb-5">
-                <h6 class="text-uppercase small fw-bold text-muted mb-3">Breakdown</h6>
-                <ul class="list-group list-group-flush">
-                    <li class="list-group-item d-flex justify-content-between align-items-center border-0 px-0">
-                        <span class="small"><i class="bi bi-circle-fill text-success me-2"></i> On Time</span>
-                        <span class="fw-bold">${present}</span>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between align-items-center border-0 px-0">
-                        <span class="small"><i class="bi bi-circle-fill text-warning me-2"></i> Late</span>
-                        <span class="fw-bold">${late}</span>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between align-items-center border-0 px-0">
-                        <span class="small"><i class="bi bi-circle-fill text-danger me-2"></i> Absent</span>
-                        <span class="fw-bold">${absent}</span>
-                    </li>
-                </ul>
-            </div>
-        `;
-
-        const offcanvas = new bootstrap.Offcanvas(document.getElementById('drillDownCanvas'));
-        offcanvas.show();
-    }
 
     function setDateRange(range) {
         const now = new Date();
         const startEl = document.getElementById('startDate');
         const endEl = document.getElementById('endDate');
-        
         if (range === 'week') {
-            const first = now.getDate() - now.getDay();
-            startEl.valueAsDate = new Date(now.setDate(first));
-            endEl.valueAsDate = new Date();
-        } else if (range === 'month') {
-            startEl.valueAsDate = new Date(now.getFullYear(), now.getMonth(), 1);
+            const d = new Date();
+            d.setDate(d.getDate() - 6);
+            startEl.valueAsDate = d;
             endEl.valueAsDate = now;
-        } else if (range === 'year') {
-            startEl.valueAsDate = new Date(now.getFullYear(), 0, 1);
+        } else {
+            startEl.valueAsDate = new Date(now.getFullYear(), now.getMonth(), 1);
             endEl.valueAsDate = now;
         }
         loadDashboard();
+    }
+
+    async function loadDashboard() {
+        const params = new URLSearchParams({
+            start_date: document.getElementById('startDate').value,
+            end_date: document.getElementById('endDate').value,
+            employment_type: document.getElementById('empType').value,
+            user_id: document.getElementById('userFilter').value,
+        });
+
+        try {
+            const response = await fetch(`/api/advanced_analytics_data?${params}`);
+            currentData = await response.json();
+            updateKpis(currentData.kpi_summary);
+            document.getElementById('refreshMeta').textContent =
+                `Data refreshed at ${currentData.refreshed_at || 'just now'}`;
+
+            const period = currentData.six_month_trends?.period_label || 'Last 6 months';
+            ['overallPeriodLabel', 'statsPeriodLabel', 'absentPeriodLabel'].forEach(id => {
+                document.getElementById(id).textContent = period;
+            });
+
+            renderWorkingLocation(currentData.working_location);
+            renderOverallAttendance(currentData.six_month_trends);
+            renderAttendanceStats(currentData.six_month_trends);
+            renderAbsenteeism(currentData.six_month_trends);
+            renderHeatmap(currentData.attendance_heatmap);
+            renderRiskList(currentData.risk_users);
+        } catch (err) {
+            console.error('Analytics load failed:', err);
+            document.getElementById('refreshMeta').textContent = 'Failed to load data';
+        }
+    }
+
+    function updateKpis(kpi) {
+        if (!kpi) return;
+        document.getElementById('kpiLate').textContent = kpi.login_late ?? 0;
+        document.getElementById('kpiEarly').textContent = kpi.login_early ?? 0;
+        document.getElementById('kpiOvertime').textContent = kpi.overtime_hours ?? 0;
+        document.getElementById('kpiAbsent').textContent = kpi.absent_sessions ?? 0;
+        document.getElementById('kpiAttendance').textContent = `${kpi.attendance_percentage ?? 0}%`;
+        document.getElementById('kpiWorked').textContent = kpi.avg_daily_hours ?? 0;
+    }
+
+    function showDrillDown(title, rows) {
+        document.getElementById('drillDownTitle').textContent = title;
+        document.getElementById('drillDownContent').innerHTML = `
+            <ul class="list-group list-group-flush">
+                ${rows.map(r => `
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span>${r.label}</span>
+                        <strong>${r.value}</strong>
+                    </li>
+                `).join('')}
+            </ul>
+        `;
+        bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('drillDownCanvas')).show();
+    }
+
+    function renderWorkingLocation(data) {
+        const labels = data?.labels || ['On Campus', 'Other Device'];
+        const values = data?.values || [0, 0];
+        Plotly.newPlot('workingLocationChart', [{
+            type: 'bar', orientation: 'h', y: labels, x: values,
+            marker: { color: '#4a90d9' }, text: values, textposition: 'outside',
+            hovertemplate: '%{y}: %{x} check-ins<extra></extra>',
+        }], {
+            ...PLOT_LAYOUT_BASE,
+            margin: { t: 10, b: 30, l: 90, r: 40 },
+            xaxis: { gridcolor: '#f0f0f0' },
+            yaxis: { autorange: 'reversed' },
+            showlegend: false,
+        }, PLOT_CONFIG);
+
+        document.getElementById('workingLocationChart').on('plotly_click', (ev) => {
+            const pt = ev.points?.[0];
+            if (!pt) return;
+            showDrillDown(`${pt.y} check-ins`, [
+                { label: 'Check-ins', value: pt.x },
+                { label: 'Share of total', value: `${values.reduce((a,b)=>a+b,0) ? Math.round(pt.x/values.reduce((a,b)=>a+b,0)*100) : 0}%` },
+            ]);
+        });
+    }
+
+    function renderOverallAttendance(data) {
+        const labels = data?.labels || [];
+        const values = data?.overall_attendance || [];
+
+        Plotly.newPlot('overallAttendanceChart', [{
+            type: 'scatter', mode: 'lines+markers', x: labels, y: values,
+            line: { color: '#5cb85c', width: 2 },
+            marker: { color: '#5cb85c', size: 8 },
+            hovertemplate: '%{x}: %{y}% on-time<extra></extra>',
+        }], {
+            ...PLOT_LAYOUT_BASE,
+            yaxis: { ticksuffix: '%', range: [0, 100], gridcolor: '#f0f0f0' },
+            xaxis: { gridcolor: '#f0f0f0' },
+            showlegend: false,
+        }, PLOT_CONFIG);
+
+        document.getElementById('overallAttendanceChart').on('plotly_click', (ev) => {
+            const pt = ev.points?.[0];
+            if (!pt) return;
+            const stats = data?.attendance_statistics || {};
+            const i = pt.pointIndex;
+            showDrillDown(`${pt.x} attendance`, [
+                { label: 'On-time rate', value: `${pt.y}%` },
+                { label: 'On time', value: stats.available?.[i] ?? 0 },
+                { label: 'Late', value: stats.late_clock_in?.[i] ?? 0 },
+                { label: 'Absent', value: stats.absent?.[i] ?? 0 },
+            ]);
+        });
+    }
+
+    function renderAttendanceStats(data) {
+        const labels = data?.labels || [];
+        const stats = data?.attendance_statistics || {};
+        const series = [
+            { key: 'available', name: 'On time', color: '#1e90ff' },
+            { key: 'overtime', name: 'After hours', color: '#87ceeb' },
+            { key: 'early_clock_in', name: 'Early clock-in', color: '#f1c40f' },
+            { key: 'late_clock_in', name: 'Late clock-in', color: '#e67e22' },
+            { key: 'absent', name: 'Absent', color: '#e74c3c' },
+            { key: 'early_clock_out', name: 'Early clock-out', color: '#f8b4c4' },
+        ];
+
+        Plotly.newPlot('attendanceStatsChart',
+            series.map(s => ({
+                type: 'bar', name: s.name, x: labels, y: stats[s.key] || [],
+                marker: { color: s.color },
+                hovertemplate: '%{x}<br>%{fullData.name}: %{y}<extra></extra>',
+            })),
+            {
+                ...PLOT_LAYOUT_BASE,
+                barmode: 'stack',
+                legend: { orientation: 'h', y: 1.15, x: 0 },
+                xaxis: { gridcolor: '#f0f0f0' },
+                yaxis: { gridcolor: '#f0f0f0' },
+            },
+            PLOT_CONFIG
+        );
+
+        document.getElementById('attendanceStatsChart').on('plotly_click', (ev) => {
+            const pt = ev.points?.[0];
+            if (!pt) return;
+            const i = pt.pointIndex;
+            showDrillDown(`${pt.x} — ${pt.data.name}`, [
+                { label: 'Count', value: pt.y },
+                { label: 'On time', value: stats.available?.[i] ?? 0 },
+                { label: 'Late', value: stats.late_clock_in?.[i] ?? 0 },
+                { label: 'Absent', value: stats.absent?.[i] ?? 0 },
+            ]);
+        });
+    }
+
+    function renderAbsenteeism(data) {
+        const labels = data?.labels || [];
+        const values = data?.absenteeism_rate || [];
+        const yMax = values.length ? Math.max(5, Math.ceil(Math.max(...values) * 1.25)) : 5;
+
+        Plotly.newPlot('absenteeismChart', [{
+            type: 'scatter', mode: 'lines', fill: 'tozeroy',
+            x: labels, y: values,
+            line: { color: '#e74c3c', width: 2 },
+            fillcolor: 'rgba(231, 76, 60, 0.35)',
+            hovertemplate: '%{x}: %{y}% absent<extra></extra>',
+        }], {
+            ...PLOT_LAYOUT_BASE,
+            yaxis: { ticksuffix: '%', range: [0, yMax], gridcolor: '#f0f0f0' },
+            xaxis: { gridcolor: '#f0f0f0' },
+            showlegend: false,
+        }, PLOT_CONFIG);
+    }
+
+    function renderHeatmap(data) {
+        const days = data?.days || [];
+        const hours = data?.hours || [];
+        const values = data?.values || [];
+        const x = hours.map(h => `${parseInt(h, 10)}:00`);
+
+        Plotly.newPlot('heatmapChart', [{
+            type: 'heatmap',
+            z: values,
+            x: x,
+            y: days,
+            colorscale: [
+                [0, '#f7fbff'], [0.25, '#c6dbef'],
+                [0.5, '#6baed6'], [0.75, '#2171b5'], [1, '#08306b'],
+            ],
+            hovertemplate: '%{y}, %{x}<br>Check-ins: %{z}<extra></extra>',
+            colorbar: { title: 'Count' },
+        }], {
+            ...PLOT_LAYOUT_BASE,
+            margin: { t: 10, b: 60, l: 70, r: 30 },
+            xaxis: { title: 'Hour', tickangle: -45 },
+            yaxis: { autorange: 'reversed' },
+        }, PLOT_CONFIG);
+    }
+
+    function renderRiskList(users) {
+        const list = document.getElementById('riskList');
+        if (!users?.length) {
+            list.innerHTML = '<div class="col-12 text-muted small">No staff flagged for follow-up in this period.</div>';
+            return;
+        }
+        list.innerHTML = users.map(u => {
+            const cls = u.risk_level === 'High' ? 'danger' : 'warning';
+            const label = u.risk_level === 'High' ? 'Needs attention' : 'Watch closely';
+            return `
+                <div class="col-md-6 col-xl-4">
+                    <button type="button" class="attention-item"
+                        onclick="showDrillDown('${u.name.replace(/'/g, "\\'")}', [
+                            { label: 'Risk level', value: '${u.risk_level}' },
+                            { label: 'Late rate', value: '${u.late_rate}' },
+                            { label: 'Absent rate', value: '${u.absent_rate}' },
+                            { label: 'Note', value: '${u.prediction}' },
+                        ])">
+                        <div class="d-flex justify-content-between gap-2">
+                            <strong>${u.name}</strong>
+                            <span class="tone-chip ${cls}">${label}</span>
+                        </div>
+                        <div class="small text-muted mt-1">Late ${u.late_rate} · Absent ${u.absent_rate}</div>
+                    </button>
+                </div>
+            `;
+        }).join('');
     }
 </script>
 {% endblock %}

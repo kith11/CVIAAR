@@ -2522,14 +2522,8 @@ async def advanced_analytics_data(
         if 0 <= h < 24:
             peak["data"][h] = int(count)
     
-    # Risks users - with separate caching
-    cached_risks = risk_cache.get("risks")
-    if cached_risks is not None:
-        risks = cached_risks
-    else:
-        risks = analytics.predict_risk_users()
-        risk_cache.set("risks", risks)
-    
+    risks = analytics.predict_risk_users(start, end, employment_type, user_id)
+
     # Store the result in the cache
     result = {
         "weekly_trends": weekly,
@@ -2537,7 +2531,12 @@ async def advanced_analytics_data(
         "status_distribution": status_dist,
         "peak_arrival": peak,
         "risk_users": risks,
-        "insights": [] # Initialize empty list for insights
+        "insights": [],
+        "kpi_summary": analytics.get_kpi_summary(start, end, employment_type, user_id),
+        "working_location": analytics.get_working_location(start, end, employment_type, user_id),
+        "six_month_trends": analytics.get_six_month_trends(start, end, employment_type, user_id),
+        "attendance_heatmap": analytics.get_attendance_heatmap(start, end, employment_type, user_id),
+        "refreshed_at": datetime.now().strftime("%b %d, %Y %I:%M %p"),
     }
 
     # Generate insights only if they are not already cached or if requested

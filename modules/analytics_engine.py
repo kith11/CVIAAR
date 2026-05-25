@@ -1,8 +1,17 @@
 
+import calendar
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from .attendance_rules import ABSENT_STATUSES, is_absent_status, is_late_status, is_on_time_status, is_present_status
+from .attendance_rules import (
+    ABSENT_STATUSES,
+    is_absent_status,
+    is_late_status,
+    is_login_record,
+    is_logout_record,
+    is_on_time_status,
+    is_present_status,
+)
 from .models import Attendance, User
 
 class AnalyticsEngine:
@@ -61,14 +70,18 @@ class AnalyticsEngine:
             if not log.timestamp:
                 continue
             data.append({
+                'id': log.id,
                 'user_id': log.user_id,
                 'name': user.name,
                 'employment_type': user.employment_type,
+                'schedule_start': user.schedule_start or '06:00',
+                'schedule_end': user.schedule_end or '19:00',
                 'timestamp': log.timestamp,
                 'status': log.status,
                 'session': getattr(log, 'session', None),
                 'event_type': getattr(log, 'event_type', None),
                 'auto_generated': getattr(log, 'auto_generated', 0),
+                'device_id': getattr(log, 'device_id', None),
                 'hour': log.timestamp.hour,
                 'weekday': log.timestamp.weekday()  # 0=Mon, 6=Sun
             })
@@ -221,25 +234,29 @@ class AnalyticsEngine:
             'absent': absent_counts
         }
 
-    def predict_risk_users(self, days=90):
+    def predict_risk_users(self, start_date=None, end_date=None, employment_type=None, user_id=None, days=90):
         """
-        Identifies users at high risk of being late or absent based on their attendance history.
-        By default, analyzes the last 90 days of data for better performance.
+        Identifies staff at elevated risk of lateness or absence within the filtered period.
 
-        This method uses a simple heuristic model:
         - **Medium Risk**: Late rate > 30%
         - **High Risk**: Absent rate > 15% or Late rate > 50%
-
-        Returns:
-            list: A list of dictionaries, where each dictionary represents a user at risk.
         """
-        start_date = (datetime.now() - timedelta(days=days)).date()
-        df = self.get_attendance_dataframe(start_date=start_date)
+        if end_date is None:
+            end_date = datetime.now().date()
+        if start_date is None:
+            start_date = end_date - timedelta(days=days)
+
+        df = self.get_attendance_dataframe(start_date, end_date, employment_type, user_id)
         if df.empty:
             return []
 
         risk_report = []
-        users = self.db.query(User).all()
+        user_query = self.db.query(User)
+        if employment_type and employment_type != 'All':
+            user_query = user_query.filter(User.employment_type == employment_type)
+        if user_id and user_id != 'All':
+            user_query = user_query.filter(User.id == int(user_id))
+        users = user_query.all()
 
         for user in users:
             user_logs = df[df['user_id'] == user.id]
@@ -266,6 +283,7 @@ class AnalyticsEngine:
 
             if risk_level != "Low":
                 risk_report.append({
+                    'user_id': user.id,
                     'name': user.name,
                     'late_rate': f"{round(late_rate, 1)}%",
                     'absent_rate': f"{round(absent_rate, 1)}%",
@@ -343,18 +361,18 @@ class AnalyticsEngine:
                     'Late',
                     'Absent',
                     'Undertime',
-                    'Official Time',
+                    'On Time',
                     'Official Business',
-                    'Leave'
+                    'Excused Absence',
                 ],
                 'data': [0, 0, 0, 0, 0, 0],
                 'colors': [
-                    '#0d6efd',
-                    '#dc3545',
+                    '#e67e22',
+                    '#e74c3c',
                     '#6c757d',
-                    '#adb5bd',
+                    '#1e90ff',
                     '#343a40',
-                    '#dee2e6'
+                    '#9b59b6',
                 ]
             }
             
@@ -364,9 +382,9 @@ class AnalyticsEngine:
             'Late': 0,
             'Absent': 0,
             'Undertime': 0,
-            'Official Time': 0,
+            'On Time': 0,
             'Official Business': 0,
-            'Leave': 0
+            'Excused Absence': 0,
         }
 
         for status, count in status_counts.items():
@@ -375,9 +393,9 @@ class AnalyticsEngine:
             elif is_absent_status(status):
                 categories['Absent'] += int(count)
             elif is_on_time_status(status):
-                categories['Official Time'] += int(count)
+                categories['On Time'] += int(count)
             elif status == 'Excused':
-                categories['Leave'] += int(count)
+                categories['Excused Absence'] += int(count)
 
         labels = list(categories.keys())
         data = [categories[label] for label in labels]
@@ -462,3 +480,241 @@ class AnalyticsEngine:
             )
 
         return insights
+
+    @staticmethod
+    def _parse_hhmm(value: str) -> tuple[int, int]:
+        try:
+            hour, minute = value.split(':')
+            return int(hour), int(minute)
+        except (ValueError, AttributeError):
+            return 6, 0
+
+    def get_kpi_summary(self, start_date=None, end_date=None, employment_type=None, user_id=None):
+        """Top-row KPI cards for school staff attendance."""
+        df = self.get_attendance_dataframe(start_date, end_date, employment_type, user_id)
+        empty = {
+            'login_late': 0,
+            'login_early': 0,
+            'overtime_hours': 0,
+            'absent_sessions': 0,
+            'attendance_percentage': 0.0,
+            'avg_daily_hours': 0.0,
+        }
+        if df.empty:
+            return empty
+
+        login_df = df[df.apply(
+            lambda row: is_login_record(row['status'], row.get('event_type')),
+            axis=1
+        )]
+
+        late_count = int(login_df['status'].apply(is_late_status).sum())
+        early_count = 0
+        for _, row in login_df.iterrows():
+            sched_h, sched_m = self._parse_hhmm(row['schedule_start'])
+            sched_minutes = sched_h * 60 + sched_m
+            actual_minutes = row['timestamp'].hour * 60 + row['timestamp'].minute
+            if actual_minutes < sched_minutes:
+                early_count += 1
+
+        overtime_minutes = 0
+        logout_df = df[df.apply(
+            lambda row: is_logout_record(row['status'], row.get('event_type')),
+            axis=1
+        )]
+        for _, row in logout_df.iterrows():
+            end_h, end_m = self._parse_hhmm(row['schedule_end'])
+            end_minutes = end_h * 60 + end_m
+            actual_minutes = row['timestamp'].hour * 60 + row['timestamp'].minute
+            if actual_minutes > end_minutes:
+                overtime_minutes += actual_minutes - end_minutes
+
+        absent_sessions = int(df['status'].apply(is_absent_status).sum())
+
+        on_time = int(df['status'].apply(is_on_time_status).sum())
+        late = int(df['status'].apply(is_late_status).sum())
+        absent = int(df['status'].apply(is_absent_status).sum())
+        attendance_total = on_time + late + absent
+        attendance_pct = round((on_time / attendance_total * 100), 1) if attendance_total > 0 else 0.0
+
+        worked_hours = []
+        for user_id_val, user_df in df.groupby('user_id'):
+            for day, day_df in user_df.groupby('date'):
+                logins = day_df[day_df.apply(
+                    lambda row: is_login_record(row['status'], row.get('event_type')),
+                    axis=1
+                )].sort_values('timestamp')
+                logouts = day_df[day_df.apply(
+                    lambda row: is_logout_record(row['status'], row.get('event_type')),
+                    axis=1
+                )].sort_values('timestamp')
+                if logins.empty or logouts.empty:
+                    continue
+                delta = (logouts.iloc[-1]['timestamp'] - logins.iloc[0]['timestamp']).total_seconds() / 3600
+                if delta > 0:
+                    worked_hours.append(delta)
+
+        avg_worked = round(sum(worked_hours) / len(worked_hours), 1) if worked_hours else 0.0
+
+        return {
+            'login_late': late_count,
+            'login_early': early_count,
+            'overtime_hours': round(overtime_minutes / 60, 1),
+            'absent_sessions': absent_sessions,
+            'attendance_percentage': attendance_pct,
+            'avg_daily_hours': avg_worked,
+        }
+
+    def get_working_location(self, start_date=None, end_date=None, employment_type=None, user_id=None):
+        """On-campus kiosk vs other device check-ins."""
+        df = self.get_attendance_dataframe(start_date, end_date, employment_type, user_id)
+        login_df = df[df.apply(
+            lambda row: is_login_record(row['status'], row.get('event_type')),
+            axis=1
+        )] if not df.empty else df
+
+        if login_df.empty:
+            return {'labels': ['On Campus', 'Other Device'], 'values': [0, 0]}
+
+        device_counts = login_df['device_id'].fillna('unknown').value_counts()
+        if len(device_counts) <= 1:
+            on_campus = int(len(login_df))
+            other = 0
+        else:
+            primary_device = device_counts.index[0]
+            on_campus = int((login_df['device_id'].fillna('unknown') == primary_device).sum())
+            other = int(len(login_df) - on_campus)
+
+        return {'labels': ['On Campus', 'Other Device'], 'values': [on_campus, other]}
+
+    def _empty_month_stats(self):
+        return {
+            'available': 0,
+            'overtime': 0,
+            'early_clock_in': 0,
+            'late_clock_in': 0,
+            'absent': 0,
+            'early_clock_out': 0,
+        }
+
+    def _compute_month_bucket(self, df: pd.DataFrame) -> dict:
+        if df.empty:
+            return {**self._empty_month_stats(), 'overall': 0.0, 'absenteeism': 0.0}
+
+        on_time = int(df['status'].apply(is_on_time_status).sum())
+        late = int(df['status'].apply(is_late_status).sum())
+        absent = int(df['status'].apply(is_absent_status).sum())
+        total = on_time + late + absent
+        overall = round((on_time / total * 100), 1) if total > 0 else 0.0
+        absenteeism = round((absent / len(df) * 100), 2) if len(df) > 0 else 0.0
+
+        early_in = 0
+        login_df = df[df.apply(
+            lambda row: is_login_record(row['status'], row.get('event_type')),
+            axis=1
+        )]
+        for _, row in login_df.iterrows():
+            sched_h, sched_m = self._parse_hhmm(row['schedule_start'])
+            actual = row['timestamp'].hour * 60 + row['timestamp'].minute
+            if actual < sched_h * 60 + sched_m:
+                early_in += 1
+
+        early_out = 0
+        overtime = 0
+        logout_df = df[df.apply(
+            lambda row: is_logout_record(row['status'], row.get('event_type')),
+            axis=1
+        )]
+        for _, row in logout_df.iterrows():
+            end_h, end_m = self._parse_hhmm(row['schedule_end'])
+            actual = row['timestamp'].hour * 60 + row['timestamp'].minute
+            if actual < end_h * 60 + end_m:
+                early_out += 1
+            if actual > end_h * 60 + end_m:
+                overtime += 1
+
+        return {
+            'overall': overall,
+            'absenteeism': absenteeism,
+            'available': on_time,
+            'overtime': overtime,
+            'early_clock_in': early_in,
+            'late_clock_in': late,
+            'absent': absent,
+            'early_clock_out': early_out,
+        }
+
+    def get_six_month_trends(self, start_date=None, end_date=None, employment_type=None, user_id=None):
+        """Six-month attendance trends (single DB query, anchored to filter end date)."""
+        anchor = end_date or datetime.now().date()
+        months = []
+        labels = []
+        for offset in range(5, -1, -1):
+            month_anchor = datetime(anchor.year, anchor.month, 1) - pd.DateOffset(months=offset)
+            months.append((int(month_anchor.year), int(month_anchor.month)))
+            labels.append(month_anchor.strftime('%b'))
+
+        span_start = datetime(months[0][0], months[0][1], 1).date()
+        y, m = months[-1]
+        span_end = datetime(y, m, calendar.monthrange(y, m)[1]).date()
+        df = self.get_attendance_dataframe(span_start, span_end, employment_type, user_id)
+
+        period_label = f"{labels[0]} – {labels[-1]} {months[-1][0]}"
+
+        stat_keys = ['available', 'overtime', 'early_clock_in', 'late_clock_in', 'absent', 'early_clock_out']
+        stats = {key: [] for key in stat_keys}
+        overall = []
+        absenteeism = []
+
+        if df.empty:
+            for _ in months:
+                overall.append(0.0)
+                absenteeism.append(0.0)
+                for key in stat_keys:
+                    stats[key].append(0)
+            return {
+                'labels': labels,
+                'period_label': period_label,
+                'overall_attendance': overall,
+                'absenteeism_rate': absenteeism,
+                'attendance_statistics': stats,
+            }
+
+        df = df.copy()
+        df['year_month'] = list(zip(df['timestamp'].dt.year, df['timestamp'].dt.month))
+
+        for year, month in months:
+            bucket_df = df[df['year_month'] == (year, month)]
+            metrics = self._compute_month_bucket(bucket_df)
+            overall.append(metrics['overall'])
+            absenteeism.append(metrics['absenteeism'])
+            for key in stat_keys:
+                stats[key].append(metrics[key])
+
+        return {
+            'labels': labels,
+            'period_label': period_label,
+            'overall_attendance': overall,
+            'absenteeism_rate': absenteeism,
+            'attendance_statistics': stats,
+        }
+
+    def get_attendance_heatmap(self, start_date=None, end_date=None, employment_type=None, user_id=None):
+        """Day-of-week x hour density matrix for check-in activity."""
+        df = self.get_attendance_dataframe(start_date, end_date, employment_type, user_id)
+        days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        hours = [f'{h:02d}' for h in range(24)]
+
+        matrix = [[0 for _ in range(24)] for _ in range(7)]
+        if df.empty:
+            return {'days': days, 'hours': hours, 'values': matrix, 'max': 0}
+
+        arrivals = df[df.apply(
+            lambda row: is_login_record(row['status'], row.get('event_type')),
+            axis=1
+        )]
+        for _, row in arrivals.iterrows():
+            matrix[row['weekday']][row['hour']] += 1
+
+        max_val = max(max(row) for row in matrix) if arrivals is not None and not arrivals.empty else 0
+        return {'days': days, 'hours': hours, 'values': matrix, 'max': max_val}
