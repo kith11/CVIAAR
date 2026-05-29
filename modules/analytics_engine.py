@@ -11,6 +11,7 @@ from .attendance_rules import (
     is_logout_record,
     is_on_time_status,
     is_present_status,
+    normalize_session,
 )
 from .models import Attendance, User
 
@@ -51,10 +52,10 @@ class AnalyticsEngine:
         query = self.db.query(Attendance, User).join(User, Attendance.user_id == User.id)
         
         if start_date:
-            query = query.filter(Attendance.timestamp >= start_date)
+            query = query.filter(Attendance.timestamp >= datetime.combine(start_date, datetime.min.time()))
         if end_date:
-            # inclusive end date
-            query = query.filter(Attendance.timestamp <= end_date + timedelta(days=1))
+            # inclusive end date (through 23:59:59.999999 of end_date)
+            query = query.filter(Attendance.timestamp <= datetime.combine(end_date, datetime.max.time()))
         if employment_type and employment_type != 'All':
             query = query.filter(User.employment_type == employment_type)
         if user_id and user_id != 'All':
@@ -354,65 +355,28 @@ class AnalyticsEngine:
         Returns:
             dict: A dictionary containing labels, data, and colors for the chart.
         """
+        # Only categories the system actually produces are charted, so the legend
+        # never shows perpetually-empty slices.
+        labels = ['On Time', 'Late', 'Absent']
+        colors = ['#1e90ff', '#e67e22', '#e74c3c']
+
         df = self.get_attendance_dataframe(start_date, end_date, employment_type, user_id)
         if df.empty:
-            return {
-                'labels': [
-                    'Late',
-                    'Absent',
-                    'Undertime',
-                    'On Time',
-                    'Official Business',
-                    'Excused Absence',
-                ],
-                'data': [0, 0, 0, 0, 0, 0],
-                'colors': [
-                    '#e67e22',
-                    '#e74c3c',
-                    '#6c757d',
-                    '#1e90ff',
-                    '#343a40',
-                    '#9b59b6',
-                ]
-            }
-            
-        status_counts = df['status'].value_counts()
+            return {'labels': labels, 'data': [0, 0, 0], 'colors': colors}
 
-        categories = {
-            'Late': 0,
-            'Absent': 0,
-            'Undertime': 0,
-            'On Time': 0,
-            'Official Business': 0,
-            'Excused Absence': 0,
-        }
-
-        for status, count in status_counts.items():
-            if is_late_status(status):
+        categories = {'On Time': 0, 'Late': 0, 'Absent': 0}
+        for status, count in df['status'].value_counts().items():
+            if is_on_time_status(status):
+                categories['On Time'] += int(count)
+            elif is_late_status(status):
                 categories['Late'] += int(count)
             elif is_absent_status(status):
                 categories['Absent'] += int(count)
-            elif is_on_time_status(status):
-                categories['On Time'] += int(count)
-            elif status == 'Excused':
-                categories['Excused Absence'] += int(count)
-
-        labels = list(categories.keys())
-        data = [categories[label] for label in labels]
-        colors = [
-            '#0d6efd',
-            '#dc3545',
-            '#6c757d',
-            '#adb5bd',
-            '#343a40',
-            '#dee2e6',
-            '#212529'
-        ]
 
         return {
             'labels': labels,
-            'data': data,
-            'colors': colors
+            'data': [categories[label] for label in labels],
+            'colors': colors,
         }
 
     def get_advanced_insights(self, start_date=None, end_date=None, employment_type=None, user_id=None):
@@ -471,8 +435,10 @@ class AnalyticsEngine:
             best_day_idx = weekly['present'].index(max_present)
             days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
             
-            # Comparative weekly analysis
-            avg_present = sum(weekly['present']) / 7
+            # Comparative weekly analysis: average only over days that actually
+            # had attendance, so a short range isn't diluted by empty weekdays.
+            active_days = [count for count in weekly['present'] if count > 0]
+            avg_present = sum(active_days) / len(active_days) if active_days else 0
             performance = (max_present / avg_present * 100) - 100 if avg_present > 0 else 0
             insights.append(
                 f"{days[best_day_idx]} had the strongest attendance in this view, "
@@ -540,19 +506,32 @@ class AnalyticsEngine:
         worked_hours = []
         for user_id_val, user_df in df.groupby('user_id'):
             for day, day_df in user_df.groupby('date'):
-                logins = day_df[day_df.apply(
-                    lambda row: is_login_record(row['status'], row.get('event_type')),
-                    axis=1
-                )].sort_values('timestamp')
-                logouts = day_df[day_df.apply(
-                    lambda row: is_logout_record(row['status'], row.get('event_type')),
-                    axis=1
-                )].sort_values('timestamp')
-                if logins.empty or logouts.empty:
-                    continue
-                delta = (logouts.iloc[-1]['timestamp'] - logins.iloc[0]['timestamp']).total_seconds() / 3600
-                if delta > 0:
-                    worked_hours.append(delta)
+                day_hours = 0.0
+                worked_any = False
+                # Pair login/logout within each session so the lunch gap between
+                # the AM and PM sessions is not counted as worked time. The stored
+                # session is preferred so a noon boundary record stays in its session.
+                session_labels = day_df.apply(
+                    lambda row: normalize_session(row.get('session'), row['timestamp']),
+                    axis=1,
+                )
+                for _session, session_df in day_df.groupby(session_labels):
+                    logins = session_df[session_df.apply(
+                        lambda row: is_login_record(row['status'], row.get('event_type')),
+                        axis=1
+                    )].sort_values('timestamp')
+                    logouts = session_df[session_df.apply(
+                        lambda row: is_logout_record(row['status'], row.get('event_type')),
+                        axis=1
+                    )].sort_values('timestamp')
+                    if logins.empty or logouts.empty:
+                        continue
+                    delta = (logouts.iloc[-1]['timestamp'] - logins.iloc[0]['timestamp']).total_seconds() / 3600
+                    if delta > 0:
+                        day_hours += delta
+                        worked_any = True
+                if worked_any:
+                    worked_hours.append(day_hours)
 
         avg_worked = round(sum(worked_hours) / len(worked_hours), 1) if worked_hours else 0.0
 

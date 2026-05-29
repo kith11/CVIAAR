@@ -8,10 +8,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from .attendance_rules import (
     AM_SESSION,
+    DEFAULT_WORK_DAYS,
     PM_SESSION,
     infer_event_type,
     is_absent_status,
     is_login_record,
+    is_working_day,
     normalize_session,
     session_absent_status,
 )
@@ -33,7 +35,8 @@ class SyncEngine:
     """
     
     def __init__(self, database_url: str, supabase_url: str = None, supabase_key: str = None, 
-                 remote_db_url: str = None, sync_interval: int = 30, device_id: str = "default_device"):
+                 remote_db_url: str = None, sync_interval: int = 30, device_id: str = "default_device",
+                 work_days=DEFAULT_WORK_DAYS, backfill_days: int = 14):
         """
         Initializes the SyncEngine.
 
@@ -51,6 +54,8 @@ class SyncEngine:
         self.remote_db_url = remote_db_url
         self.sync_interval = sync_interval
         self.device_id = device_id
+        self.work_days = set(work_days) or set(DEFAULT_WORK_DAYS)
+        self.backfill_days = max(int(backfill_days), 1)
         
         # Database setup for the local SQLite store
         connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
@@ -165,6 +170,21 @@ class SyncEngine:
         finally:
             session.close()
 
+    def _backfill_absences(self, up_to: date) -> int:
+        """Mark absences for every working day in the backfill window up to `up_to`.
+
+        Non-working days (weekends/holidays per ``work_days``) are skipped so the
+        whole staff is not marked absent on days nobody was scheduled. Already
+        marked days are no-ops thanks to the idempotent session check.
+        """
+        created = 0
+        for offset in range(self.backfill_days, 0, -1):
+            target = up_to - timedelta(days=offset - 1)
+            if not is_working_day(target, self.work_days):
+                continue
+            created += self._auto_mark_absent_for_date(target)
+        return created
+
     def stop_sync_worker(self):
         """Stops the background synchronization thread."""
         self.stop_sync.set()
@@ -184,10 +204,12 @@ class SyncEngine:
                 target = today - timedelta(days=1)
                 target_key = target.isoformat()
                 if self._last_absence_marked_date != target_key:
-                    created = self._auto_mark_absent_for_date(target)
+                    created = self._backfill_absences(target)
                     self._last_absence_marked_date = target_key
                     if created:
-                        logger.info(f"Auto-marked {created} absences for {target_key}.")
+                        logger.info(
+                            f"Auto-marked {created} absences across working days up to {target_key}."
+                        )
 
                 if self._check_internet():
                     self._sync_pending()
