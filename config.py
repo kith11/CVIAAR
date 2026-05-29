@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # Upstash Redis for Live Layer
     UPSTASH_REDIS_URL: str | None = None
     UPSTASH_REDIS_TOKEN: str | None = None
-    REDIS_URL: str | None = "redis://redis:6379/0" # Default to docker service
+    REDIS_URL: str | None = "redis://localhost:6379/0" # Local default; docker-compose overrides to the "redis" service
 
     # Face Recognition Tunables
     LBPH_DISTANCE_THRESHOLD: float = 95.0
