@@ -49,9 +49,10 @@ services:
       - PORT=5000
       - TZ=Asia/Manila
       - INSTANCE_LOCK_ENABLED=false
-      # Override DB and Redis URLs to use the local Docker containers if desired
+      # Point at the bundled redis service (overrides the localhost default in config.py).
+      - REDIS_URL=redis://redis:6379/0
+      # Override the DB URL to use the local Docker container if desired
       # - DATABASE_URL=postgresql://admin:password123@db:5432/cviaar
-      # - REDIS_URL=redis://redis:6379/0
       - DEBUG=true
     depends_on:
       db:

@@ -479,7 +479,9 @@ if settings.REDIS_URL and local_redis:
         redis.ping()
         logging.info(f"Successfully connected to local Redis at {settings.REDIS_URL}")
     except Exception as e:
-        logging.error(f"Error connecting to local Redis: {e}")
+        # Redis only powers optional live-status broadcasting, so a missing local
+        # instance (e.g. running outside Docker) is a warning, not an error.
+        logging.warning(f"Local Redis unavailable at {settings.REDIS_URL}, continuing without it: {e}")
         redis = None
 
 if not redis and settings.UPSTASH_REDIS_URL and settings.UPSTASH_REDIS_TOKEN and UpstashRedis:
