@@ -12,6 +12,23 @@ class Settings(BaseSettings):
     ADMIN_PASSWORD: str = "admin123"
     SESSION_MAX_AGE_SECONDS: int = 60 * 60 * 12
 
+    # Attendance Policy
+    LATE_GRACE_MINUTES: int = 15
+    """Minutes after the scheduled start before a login is marked Late."""
+    WORK_DAYS: str = "0,1,2,3,4"
+    """Working weekdays as Python weekday ints (0=Mon..6=Sun). Used for auto-absence."""
+    AUTO_ABSENT_BACKFILL_DAYS: int = 14
+    """How many past days the auto-absence marker will backfill on each run."""
+
+    @property
+    def work_days_set(self) -> set[int]:
+        days: set[int] = set()
+        for part in str(self.WORK_DAYS).split(','):
+            part = part.strip()
+            if part.isdigit() and 0 <= int(part) <= 6:
+                days.add(int(part))
+        return days or {0, 1, 2, 3, 4}
+
     # Database URLs
     SQLITE_DB_PATH: str = "data/offline/cviaar_local.sqlite3"
     DATABASE_URL: str | None = Field(

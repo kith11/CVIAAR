@@ -123,6 +123,38 @@ class SyncEngineTests(unittest.TestCase):
         self.assertEqual(second_created, 0)
         self.assertEqual([row.status for row in rows], ["AM Absent", "Logout", "PM Absent"])
 
+    def test_backfill_absences_skips_weekends(self):
+        session = self.engine.Session()
+        try:
+            user = User(name="Backfill User", email="backfill@gmail.com", staff_code="333333")
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+        finally:
+            session.close()
+
+        # Backfill the week ending Friday 2026-03-27 (Mon-Fri are work days).
+        created = self.engine._backfill_absences(date(2026, 3, 27))
+
+        verify_session = self.engine.Session()
+        try:
+            rows = (
+                verify_session.query(Attendance)
+                .filter(Attendance.user_id == user.id)
+                .all()
+            )
+        finally:
+            verify_session.close()
+
+        marked_dates = {row.timestamp.date() for row in rows}
+        # Saturday/Sunday in the window must not be marked absent.
+        self.assertNotIn(date(2026, 3, 21), marked_dates)  # Saturday
+        self.assertNotIn(date(2026, 3, 22), marked_dates)  # Sunday
+        # Working days are marked (AM + PM per day).
+        self.assertIn(date(2026, 3, 27), marked_dates)  # Friday
+        self.assertTrue(all(d.weekday() < 5 for d in marked_dates))
+        self.assertEqual(created, len(rows))
+
     def test_get_sync_stats_no_longer_requires_face_engine(self):
         stats = self.engine.get_sync_stats()
 

@@ -80,7 +80,10 @@ from modules.models import Base, User, Attendance, AttendanceEdit, AuditEvent, E
 from modules.analytics_engine import AnalyticsEngine
 from modules.attendance_rules import (
     ABSENT_STATUSES,
+    classify_login_status,
     infer_event_type,
+    is_login_record,
+    is_logout_record,
     is_present_status,
     normalize_session,
 )
@@ -550,6 +553,8 @@ def ensure_kiosk_runtime() -> bool:
                     remote_db_url=remote_database_url,
                     sync_interval=30,
                     device_id=settings.DEVICE_ID,
+                    work_days=settings.work_days_set,
+                    backfill_days=settings.AUTO_ABSENT_BACKFILL_DAYS,
                 )
                 sync_engine.start_sync_worker()
             elif not settings.SYNC_ENABLED:
@@ -756,6 +761,34 @@ def latest_user_status_for_day(db: Session, user_id: int, target_date: date) -> 
         .first()
     )
     return latest.status if latest else None
+
+
+def count_session_events_for_day(
+    db: Session, user_id: int, session: str | None, target_date: date
+) -> tuple[int, int]:
+    """Return (login_count, logout_count) for a user's session on the given day."""
+    start = datetime.combine(target_date, datetime.min.time())
+    end = datetime.combine(target_date, datetime.max.time())
+    records = (
+        db.query(Attendance)
+        .filter(
+            Attendance.user_id == user_id,
+            Attendance.timestamp >= start,
+            Attendance.timestamp <= end,
+        )
+        .all()
+    )
+    login_count = 0
+    logout_count = 0
+    for record in records:
+        record_session = normalize_session(getattr(record, "session", None), record.timestamp)
+        if session is not None and record_session != session:
+            continue
+        if is_login_record(record.status, getattr(record, "event_type", None)):
+            login_count += 1
+        elif is_logout_record(record.status, getattr(record, "event_type", None)):
+            logout_count += 1
+    return login_count, logout_count
 
 
 def count_present_users_from_db(db: Session, target_date: date | None = None) -> int:
@@ -1357,10 +1390,17 @@ async def admin(request: Request, db: Session = Depends(get_db)):
         
         # Safeguard analytics results for template rendering
         try:
-            trends = analytics.get_weekly_trends()
+            week_end = get_now().date()
+            week_start = week_end - timedelta(days=6)
+            trends = analytics.get_weekly_trends(week_start, week_end)
         except Exception as e:
             logging.warning(f"Failed to fetch weekly trends: {e}")
-            trends = {"labels": [], "present": [], "tardy": [], "absent": []}
+            trends = {
+                "labels": ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                "present": [0] * 7,
+                "late": [0] * 7,
+                "absent": [0] * 7,
+            }
 
         try:
             risks = analytics.predict_risk_users()
@@ -2252,14 +2292,29 @@ async def api_attendance_record(request: Request, db: Session = Depends(get_db))
         redis_client = redis
         redis_available = redis_client is not None
 
-        if action_normalized == 'login':
-            sch_start_str = user.schedule_start or "06:00"
-            try:
-                sch_start_dt = now.replace(hour=int(sch_start_str[:2]), minute=int(sch_start_str[3:]), second=0, microsecond=0)
-            except (TypeError, ValueError, IndexError):
-                sch_start_dt = now.replace(hour=6, minute=0)
+        current_session = attendance_fields["session"]
+        existing_logins, existing_logouts = count_session_events_for_day(
+            db, uid, current_session, now.date()
+        )
 
-            status = 'On Time' if now <= sch_start_dt + timedelta(minutes=15) else 'Late'
+        if action_normalized == 'login':
+            # Prevent a second login for the same session/day (the first arrival
+            # is the one that counts for punctuality).
+            if existing_logins > 0:
+                return JSONResponse(
+                    {
+                        'status': 'error',
+                        'message': f"{user.name} is already logged in for this session.",
+                    },
+                    status_code=409,
+                )
+
+            status = classify_login_status(
+                now,
+                user.schedule_start or "06:00",
+                session=current_session,
+                grace_minutes=settings.LATE_GRACE_MINUTES,
+            )
             attendance_fields["status"] = status
 
             if sync_engine:
@@ -2293,6 +2348,16 @@ async def api_attendance_record(request: Request, db: Session = Depends(get_db))
             message = f"Login successful for {user.name}."
 
         elif action_normalized == 'logout':
+            # A logout only makes sense after a login that has not been closed yet.
+            if existing_logins <= existing_logouts:
+                return JSONResponse(
+                    {
+                        'status': 'error',
+                        'message': f"{user.name} has no active login to log out from.",
+                    },
+                    status_code=409,
+                )
+
             if sync_engine:
                 try:
                     sync_engine.record_attendance(
@@ -2617,7 +2682,14 @@ async def request_early_report(
     late_arrivals = sum(1 for log in logs if log.status in ["Late", "Tardy"])
     absent_sessions = sum(1 for log in logs if log.status in ABSENT_STATUSES)
     total_arrivals = on_time_arrivals + late_arrivals
-    punctuality_score = (on_time_arrivals / total_arrivals * 100) if total_arrivals > 0 else 100
+    if total_arrivals > 0:
+        punctuality_score = on_time_arrivals / total_arrivals * 100
+    elif absent_sessions > 0:
+        # No check-ins but recorded absences: punctuality is 0, not a perfect score.
+        punctuality_score = 0
+    else:
+        # No attendance data at all for the period.
+        punctuality_score = 100
 
     # Determine a motivational message based on the score.
     if punctuality_score >= 95:
