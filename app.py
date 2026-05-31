@@ -72,7 +72,7 @@ except ImportError:
     local_redis = None
 
 from config import settings
-from modules.models import Base, User, Attendance, AttendanceEdit, AuditEvent, ExcuseNote, ensure_application_schema
+from modules.models import Base, User, Attendance, AttendanceEdit, AuditEvent, ExcuseNote, ensure_application_schema, configure_sqlite_engine
 # Heavy modules moved into conditional blocks below
 # from modules.camera import Camera
 # from modules.face_engine import FaceEngine
@@ -321,6 +321,7 @@ _last_remote_retry_at = 0.0
 def create_checked_engine(database_url: str):
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
     checked_engine = create_engine(database_url, connect_args=connect_args)
+    configure_sqlite_engine(checked_engine)
     with checked_engine.connect() as conn:
         conn.execute(text("SELECT 1"))
     return checked_engine

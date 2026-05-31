@@ -201,6 +201,122 @@ class SyncEngineTests(unittest.TestCase):
         self.assertIn("synced", attendance_columns)
         self.assertIn("synced_at", attendance_columns)
 
+    def test_schema_repair_backfills_null_sync_keys_and_adds_unique_index(self):
+        legacy_path = os.path.join(self.tempdir.name, "legacy_keys.sqlite3")
+        connection = sqlite3.connect(legacy_path)
+        try:
+            connection.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL)")
+            # Legacy attendance table without sync_key (predates offline sync).
+            connection.execute(
+                "CREATE TABLE attendance_logs ("
+                "id INTEGER PRIMARY KEY, "
+                "user_id INTEGER NOT NULL, "
+                "timestamp DATETIME, "
+                "status VARCHAR(20) NOT NULL)"
+            )
+            connection.execute("INSERT INTO users (id, name) VALUES (1, 'Legacy')")
+            for day in (1, 2, 3):
+                connection.execute(
+                    "INSERT INTO attendance_logs (user_id, timestamp, status) "
+                    f"VALUES (1, '2026-01-0{day} 08:00:00', 'On Time')"
+                )
+            connection.commit()
+        finally:
+            connection.close()
+
+        ensure_application_schema(create_engine(f"sqlite:///{legacy_path}"))
+
+        verify = sqlite3.connect(legacy_path)
+        try:
+            keys = [row[0] for row in verify.execute("SELECT sync_key FROM attendance_logs").fetchall()]
+            indexes = {row[1] for row in verify.execute("PRAGMA index_list(attendance_logs)").fetchall()}
+        finally:
+            verify.close()
+
+        self.assertEqual(len(keys), 3)
+        self.assertTrue(all(key for key in keys), "every legacy row should get a sync_key")
+        self.assertEqual(len(set(keys)), 3, "backfilled sync_keys must be unique")
+        self.assertIn("ix_attendance_logs_sync_key", indexes)
+
+    def test_local_sqlite_engine_runs_in_wal_mode(self):
+        with self.engine.engine.connect() as conn:
+            from sqlalchemy import text as _text
+
+            journal_mode = conn.execute(_text("PRAGMA journal_mode")).scalar()
+            busy_timeout = conn.execute(_text("PRAGMA busy_timeout")).scalar()
+
+        self.assertEqual(str(journal_mode).lower(), "wal")
+        self.assertGreaterEqual(int(busy_timeout), 5000)
+
+    def test_direct_postgres_sync_inserts_then_updates_remote_user(self):
+        remote_path = os.path.join(self.tempdir.name, "remote.sqlite3")
+        remote_url = f"sqlite:///{remote_path}"
+        engine = SyncEngine(
+            database_url=self.database_url,
+            remote_db_url=remote_url,
+            sync_interval=1,
+            device_id="test-device",
+        )
+
+        local = engine.Session()
+        try:
+            local.add(User(id=1, name="Original", staff_code="100000", schedule_start="06:00"))
+            local.commit()
+        finally:
+            local.close()
+
+        engine.record_attendance(
+            user_id=1, status="On Time", timestamp=datetime(2026, 3, 25, 8, 0), event_type="login"
+        )
+        engine._sync_pending()
+
+        remote = engine.RemoteSession()
+        try:
+            remote_user = remote.query(User).filter_by(id=1).first()
+            synced_rows = remote.query(Attendance).count()
+        finally:
+            remote.close()
+        self.assertIsNotNone(remote_user)
+        self.assertEqual(remote_user.name, "Original")
+        self.assertEqual(remote_user.schedule_start, "06:00")
+        self.assertEqual(synced_rows, 1)
+
+        # Local rows should be flagged synced so they are not re-sent.
+        local = engine.Session()
+        try:
+            pending = local.query(Attendance).filter(Attendance.synced == 0).count()
+        finally:
+            local.close()
+        self.assertEqual(pending, 0)
+
+        # Edit the user locally, record again, and re-sync: the remote profile
+        # must reflect the edit instead of staying stale.
+        local = engine.Session()
+        try:
+            user = local.query(User).filter_by(id=1).first()
+            user.name = "Renamed"
+            user.schedule_start = "07:30"
+            local.commit()
+        finally:
+            local.close()
+
+        engine.record_attendance(
+            user_id=1, status="On Time", timestamp=datetime(2026, 3, 26, 8, 0), event_type="login"
+        )
+        engine._sync_pending()
+
+        remote = engine.RemoteSession()
+        try:
+            remote_user = remote.query(User).filter_by(id=1).first()
+            remote_count = remote.query(Attendance).count()
+        finally:
+            remote.close()
+        engine.stop_sync_worker()
+
+        self.assertEqual(remote_user.name, "Renamed")
+        self.assertEqual(remote_user.schedule_start, "07:30")
+        self.assertEqual(remote_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
