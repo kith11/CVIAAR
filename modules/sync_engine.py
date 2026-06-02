@@ -17,7 +17,7 @@ from .attendance_rules import (
     normalize_session,
     session_absent_status,
 )
-from .models import Attendance, Base, User, ensure_application_schema
+from .models import Attendance, Base, User, configure_sqlite_engine, ensure_application_schema
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,7 @@ class SyncEngine:
         # Database setup for the local SQLite store
         connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
         self.engine = create_engine(database_url, connect_args=connect_args)
+        configure_sqlite_engine(self.engine)
         Base.metadata.create_all(self.engine)
         ensure_application_schema(self.engine)
         self.Session = sessionmaker(bind=self.engine)
@@ -71,6 +72,7 @@ class SyncEngine:
             try:
                 remote_connect_args = {"check_same_thread": False} if self.remote_db_url.startswith("sqlite") else {}
                 self.remote_engine = create_engine(self.remote_db_url, connect_args=remote_connect_args)
+                configure_sqlite_engine(self.remote_engine)
                 Base.metadata.create_all(self.remote_engine)
                 ensure_application_schema(self.remote_engine)
                 self.RemoteSession = sessionmaker(bind=self.remote_engine)
@@ -338,22 +340,33 @@ class SyncEngine:
             # 1. Sync users first
             unique_user_ids = {r.user_id for r in pending_records}
             for user_id in unique_user_ids:
+                local_user = local_session.query(User).filter_by(id=user_id).first()
+                if not local_user:
+                    continue
                 remote_user = remote_session.query(User).filter_by(id=user_id).first()
                 if not remote_user:
-                    local_user = local_session.query(User).filter_by(id=user_id).first()
-                    if local_user:
-                        new_remote_user = User(
-                            id=local_user.id,
-                            name=local_user.name,
-                            email=local_user.email,
-                            staff_code=local_user.staff_code,
-                            created_at=local_user.created_at,
-                            schedule_start=local_user.schedule_start,
-                            schedule_end=local_user.schedule_end,
-                            employment_type=local_user.employment_type,
-                            role=local_user.role
-                        )
-                        remote_session.add(new_remote_user)
+                    new_remote_user = User(
+                        id=local_user.id,
+                        name=local_user.name,
+                        email=local_user.email,
+                        staff_code=local_user.staff_code,
+                        created_at=local_user.created_at,
+                        schedule_start=local_user.schedule_start,
+                        schedule_end=local_user.schedule_end,
+                        employment_type=local_user.employment_type,
+                        role=local_user.role
+                    )
+                    remote_session.add(new_remote_user)
+                else:
+                    # Push profile edits made on the kiosk (schedule, role, etc.)
+                    # so the cloud copy does not drift out of date.
+                    remote_user.name = local_user.name
+                    remote_user.email = local_user.email
+                    remote_user.staff_code = local_user.staff_code
+                    remote_user.schedule_start = local_user.schedule_start
+                    remote_user.schedule_end = local_user.schedule_end
+                    remote_user.employment_type = local_user.employment_type
+                    remote_user.role = local_user.role
             
             remote_session.flush()
 

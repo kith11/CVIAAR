@@ -1,9 +1,33 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, inspect, text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, event, inspect, text
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
 import uuid
 
 Base = declarative_base()
+
+
+def configure_sqlite_engine(engine) -> None:
+    """Make a SQLite engine safe for the kiosk's concurrent writers.
+
+    The kiosk writes from FastAPI request threads and a background sync worker
+    through separate engines on the same database file. With SQLite's default
+    rollback journal and a zero ``busy_timeout`` those overlap as
+    ``database is locked`` errors. WAL lets a reader and a writer proceed at the
+    same time, and the busy timeout makes competing writers wait briefly instead
+    of failing immediately. No-op for non-SQLite engines.
+    """
+    if engine.dialect.name != "sqlite":
+        return
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, _connection_record):
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+        finally:
+            cursor.close()
 
 
 class User(Base):
@@ -88,12 +112,37 @@ def ensure_attendance_schema(engine) -> None:
     if "synced_at" not in existing_columns:
         statements.append("ALTER TABLE attendance_logs ADD COLUMN synced_at TIMESTAMP")
 
-    if not statements:
-        return
-
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
+        # Always reconcile sync_key, even when no column was just added: a column
+        # added by an earlier upgrade may still hold NULLs from before this fix.
+        _reconcile_sync_keys(connection)
+
+
+def _reconcile_sync_keys(connection) -> None:
+    """Backfill NULL sync_keys and enforce uniqueness on ``attendance_logs``.
+
+    ``sync_key`` is the identity used to deduplicate records during sync. When the
+    column is added to a legacy database it starts entirely NULL, which makes the
+    ``filter_by(sync_key=None)`` lookups match every legacy row. We give each such
+    row its own UUID and add a unique index so the dedupe logic is reliable.
+    """
+    rows = connection.execute(
+        text("SELECT id FROM attendance_logs WHERE sync_key IS NULL")
+    ).fetchall()
+    for (row_id,) in rows:
+        connection.execute(
+            text("UPDATE attendance_logs SET sync_key = :key WHERE id = :id"),
+            {"key": str(uuid.uuid4()), "id": row_id},
+        )
+
+    connection.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_attendance_logs_sync_key "
+            "ON attendance_logs (sync_key)"
+        )
+    )
 
 
 def ensure_user_schema(engine) -> None:
