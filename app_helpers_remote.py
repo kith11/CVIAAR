@@ -1,13 +1,17 @@
 from modules.models import User, Attendance
-from modules.sync_engine import sync_engine
-from modules.sync_engine import SyncEngine
 from datetime import datetime
 import os, shutil, logging
+
+
+def _get_sync_engine():
+    import app
+    return app.sync_engine
 
 # Helpers applied from remote events to local DB
 
 def _apply_remote_delete(user_id: int) -> None:
     try:
+        sync_engine = _get_sync_engine()
         if not sync_engine:
             logging.warning("sync_engine not available for _apply_remote_delete")
             return
@@ -37,6 +41,7 @@ def _apply_remote_delete(user_id: int) -> None:
 
 def _apply_remote_upsert(user_obj: dict) -> None:
     try:
+        sync_engine = _get_sync_engine()
         if not sync_engine:
             logging.warning("sync_engine not available for _apply_remote_upsert")
             return
