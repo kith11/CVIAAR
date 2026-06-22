@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str | None = None
     SYNC_ENABLED: bool = True # Enable or disable the sync worker
 
+    # Webhook secret for remote->local push notifications
+    WEBHOOK_SECRET: str | None = None
+
     # Upstash Redis for Live Layer
     UPSTASH_REDIS_URL: str | None = None
     UPSTASH_REDIS_TOKEN: str | None = None

@@ -2604,6 +2604,12 @@ async def delete_user(user_id: int, request: Request, background_tasks: Backgrou
         if face_engine:
             background_tasks.add_task(train_and_reload_model_task)
 
+        # Propagate deletion to remote in background
+        try:
+            background_tasks.add_task(_remote_delete_user_task, user.id)
+        except Exception:
+            logging.exception("Failed to schedule remote deletion propagation for user %s", user.id)
+
         record_audit_event(
             db,
             action_type="delete_user",
@@ -2675,6 +2681,77 @@ async def api_train_model(request: Request, background_tasks: BackgroundTasks):
         return JSONResponse({'status': 'busy', 'message': 'Face model is already updating.'}, status_code=409)
     else:
         return JSONResponse({'status': 'error', 'message': 'Face engine not available.'}, status_code=500)
+
+# --- Webhook & remote-trigger endpoints ---
+# Import remote helpers
+from app_helpers_remote import _apply_remote_delete, _apply_remote_upsert
+
+
+@app.post('/api/webhook/trigger_sync')
+async def api_webhook_trigger_sync(request: Request, background_tasks: BackgroundTasks):
+    """Trigger an immediate sync: push pending to remote and pull remote->local.
+
+    Protected by WEBHOOK_SECRET (X-Webhook-Token header).
+    """
+    token = request.headers.get('X-Webhook-Token') or request.query_params.get('token')
+    if not token or token != settings.WEBHOOK_SECRET:
+        return JSONResponse({'status': 'error', 'message': 'Unauthorized'}, status_code=401)
+
+    if not sync_engine:
+        return JSONResponse({'status': 'error', 'message': 'Sync engine not running'}, status_code=503)
+
+    # Schedule push then pull so remote sees local changes first
+    try:
+        background_tasks.add_task(sync_engine._sync_pending)
+        background_tasks.add_task(sync_engine._pull_remote_changes)
+        return JSONResponse({'status': 'success', 'message': 'Sync tasks scheduled'})
+    except Exception as e:
+        logging.error('Failed to schedule sync tasks: %s', e)
+        return JSONResponse({'status': 'error', 'message': 'Failed to schedule tasks'}, status_code=500)
+
+
+@app.post('/api/webhook/remote_event')
+async def api_webhook_remote_event(request: Request, background_tasks: BackgroundTasks):
+    """Receive a remote event (create/update/delete) and apply conservatively to local DB.
+
+    Expected JSON payload examples:
+      {"type": "user.updated", "user": {...}}
+      {"type": "user.deleted", "user_id": 42}
+
+    Protected by WEBHOOK_SECRET.
+    """
+    token = request.headers.get('X-Webhook-Token') or request.query_params.get('token')
+    if not token or token != settings.WEBHOOK_SECRET:
+        return JSONResponse({'status': 'error', 'message': 'Unauthorized'}, status_code=401)
+
+    data = await request.json()
+    ev_type = data.get('type')
+
+    if ev_type == 'user.deleted':
+        uid = data.get('user_id')
+        if not uid:
+            return JSONResponse({'status': 'error', 'message': 'user_id missing'}, status_code=400)
+        # conservative: delete local user and attendance to mirror remote deletion
+        try:
+            background_tasks.add_task(_apply_remote_delete, int(uid))
+            return JSONResponse({'status': 'success', 'message': 'delete scheduled'})
+        except Exception as e:
+            logging.error('Failed to schedule remote delete apply: %s', e)
+            return JSONResponse({'status': 'error', 'message': 'failed to schedule'}, status_code=500)
+
+    if ev_type in ('user.created', 'user.updated'):
+        user_obj = data.get('user')
+        if not user_obj:
+            return JSONResponse({'status': 'error', 'message': 'user object missing'}, status_code=400)
+        try:
+            background_tasks.add_task(_apply_remote_upsert, user_obj)
+            return JSONResponse({'status': 'success', 'message': 'upsert scheduled'})
+        except Exception as e:
+            logging.error('Failed to schedule remote upsert apply: %s', e)
+            return JSONResponse({'status': 'error', 'message': 'failed to schedule'}, status_code=500)
+
+    return JSONResponse({'status': 'error', 'message': 'unknown event type'}, status_code=400)
+
 
 @app.get("/api/advanced_analytics_data")
 async def advanced_analytics_data(
