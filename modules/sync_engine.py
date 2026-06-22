@@ -92,7 +92,10 @@ class SyncEngine:
             'last_sync_time': None,
             'last_error': None,
             'consecutive_failures': 0,
-            'disabled': False
+            'disabled': False,
+            # Debug fields for REST/Postgres responses
+            'last_response_code': None,
+            'last_response_text': None,
         }
 
         self._last_absence_marked_date: str | None = None
@@ -501,18 +504,26 @@ class SyncEngine:
 
             if resp.status_code in [200, 201, 204]:
                 logger.info(f"Successfully synced {len(batch)} records. Status: {resp.status_code}")
+                # Clear last response debug info on success
+                self.sync_stats['last_response_code'] = resp.status_code
+                self.sync_stats['last_response_text'] = resp.text[:2048] if resp.text else None
                 return True
             else:
                 logger.error(f"Failed to sync records. Status: {resp.status_code}, Response: {resp.text}")
+                # Record debug info for operator
+                self.sync_stats['last_response_code'] = resp.status_code
+                self.sync_stats['last_response_text'] = resp.text[:2048] if resp.text else None
                 # Log headers for debugging (excluding sensitive info)
                 safe_headers = {k: v if k.lower() not in ['apikey', 'authorization'] else '[MASKED]' for k, v in headers.items()}
                 logger.error(f"Request Headers: {safe_headers}")
                 return False
         except requests.exceptions.RequestException as re:
             logger.error(f"Network error during Supabase sync: {re}")
+            self.sync_stats['last_error'] = str(re)
             return False
         except Exception as e:
             logger.error(f"Unexpected exception during Supabase sync: {e}")
+            self.sync_stats['last_error'] = str(e)
             return False
         finally:
             local_session.close()

@@ -2753,6 +2753,25 @@ async def api_webhook_remote_event(request: Request, background_tasks: Backgroun
     return JSONResponse({'status': 'error', 'message': 'unknown event type'}, status_code=400)
 
 
+@app.get('/api/sync_stats')
+async def api_sync_stats(request: Request):
+    """Returns current sync engine stats for debugging. Requires admin API access."""
+    guard = require_admin_api(request)
+    if guard:
+        return guard
+    if not sync_engine:
+        return JSONResponse({'status': 'error', 'message': 'Sync engine not initialized'}, status_code=503)
+    try:
+        stats = sync_engine.get_sync_stats()
+        # Don't return huge response bodies
+        if stats.get('last_response_text') and len(stats['last_response_text']) > 2000:
+            stats['last_response_text'] = stats['last_response_text'][:2000] + '...'
+        return JSONResponse({'status': 'success', 'stats': stats})
+    except Exception as e:
+        logging.exception('Failed to fetch sync stats: %s', e)
+        return JSONResponse({'status': 'error', 'message': 'internal error'}, status_code=500)
+
+
 @app.get("/api/advanced_analytics_data")
 async def advanced_analytics_data(
     request: Request,
