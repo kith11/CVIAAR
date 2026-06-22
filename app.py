@@ -1078,6 +1078,133 @@ def queue_email_delivery(background_tasks: BackgroundTasks, to_email: str, subje
     background_tasks.add_task(send_email_task, to_email, subject, body)
 
 
+# --- Remote propagation helpers ---
+import requests
+
+def _remote_delete_user_task(user_id: int) -> None:
+    """Propagate a local user deletion to the remote (Postgres or Supabase REST)."""
+    try:
+        if not sync_engine:
+            return
+        # Prefer direct Postgres when available
+        if sync_engine.RemoteSession:
+            remote_session = sync_engine.RemoteSession()
+            try:
+                remote_session.query(Attendance).filter(Attendance.user_id == user_id).delete()
+                remote_user = remote_session.get(User, user_id)
+                if remote_user:
+                    remote_session.delete(remote_user)
+                remote_session.commit()
+                logging.info("Remote deletion propagated for user %s", user_id)
+            except Exception as exc:
+                remote_session.rollback()
+                logging.error("Failed to propagate remote deletion for user %s: %s", user_id, exc)
+            finally:
+                remote_session.close()
+            return
+
+        # REST fallback for Supabase
+        if sync_engine.supabase_url and sync_engine.supabase_key:
+            base = sync_engine.supabase_url.rstrip('/')
+            headers = {
+                'apikey': sync_engine.supabase_key,
+                'Authorization': f'Bearer {sync_engine.supabase_key}',
+            }
+            try:
+                requests.delete(f"{base}/rest/v1/attendance_logs?user_id=eq.{user_id}", headers=headers, timeout=10)
+                requests.delete(f"{base}/rest/v1/users?id=eq.{user_id}", headers=headers, timeout=10)
+                logging.info("Remote REST deletion propagated for user %s", user_id)
+            except Exception as exc:
+                logging.error("Failed to propagate remote REST deletion for user %s: %s", user_id, exc)
+    except Exception as e:
+        logging.error("Unexpected error in remote delete task for user %s: %s", user_id, e)
+
+
+def _remote_upsert_user_task(user_id: int) -> None:
+    """Propagate a local user update/create to the remote database or Supabase REST.
+
+    Conservative: only inserts or updates the remote user row to mirror local profile fields.
+    Does not attempt to merge complex conflicts; remote is updated to match local.
+    """
+    try:
+        if not sync_engine:
+            return
+        local_db = None
+        try:
+            local_db = sync_engine.Session()
+            user = local_db.get(User, user_id)
+            if not user:
+                return
+            # Direct Postgres
+            if sync_engine.RemoteSession:
+                remote_session = sync_engine.RemoteSession()
+                try:
+                    remote_user = remote_session.get(User, user_id)
+                    if not remote_user:
+                        new_remote = User(
+                            id=user.id,
+                            name=user.name,
+                            email=user.email,
+                            staff_code=user.staff_code,
+                            created_at=user.created_at,
+                            schedule_start=user.schedule_start,
+                            schedule_end=user.schedule_end,
+                            employment_type=user.employment_type,
+                            role=user.role,
+                        )
+                        remote_session.add(new_remote)
+                    else:
+                        remote_user.name = user.name
+                        remote_user.email = user.email
+                        remote_user.staff_code = user.staff_code
+                        remote_user.schedule_start = user.schedule_start
+                        remote_user.schedule_end = user.schedule_end
+                        remote_user.employment_type = user.employment_type
+                        remote_user.role = user.role
+                    remote_session.commit()
+                    logging.info("Remote upserted user %s", user_id)
+                except Exception as exc:
+                    remote_session.rollback()
+                    logging.error("Failed to upsert remote user %s: %s", user_id, exc)
+                finally:
+                    remote_session.close()
+                return
+
+            # REST fallback
+            if sync_engine.supabase_url and sync_engine.supabase_key:
+                base = sync_engine.supabase_url.rstrip('/')
+                headers = {
+                    'apikey': sync_engine.supabase_key,
+                    'Authorization': f'Bearer {sync_engine.supabase_key}',
+                    'Content-Type': 'application/json',
+                    'Prefer': 'resolution=merge-duplicates'
+                }
+                payload = [{
+                    'id': user.id,
+                    'name': user.name,
+                    'email': user.email,
+                    'staff_code': user.staff_code,
+                    'created_at': user.created_at.isoformat() if getattr(user, 'created_at', None) else None,
+                    'schedule_start': getattr(user, 'schedule_start', None),
+                    'schedule_end': getattr(user, 'schedule_end', None),
+                    'employment_type': getattr(user, 'employment_type', None),
+                    'role': getattr(user, 'role', None),
+                }]
+                try:
+                    resp = requests.post(f"{base}/rest/v1/users", json=payload, headers=headers, timeout=10)
+                    if resp.status_code not in (200, 201, 204):
+                        logging.error("Supabase REST user upsert failed for %s: %s %s", user_id, resp.status_code, resp.text)
+                    else:
+                        logging.info("Supabase REST user upsert succeeded for %s", user_id)
+                except Exception as exc:
+                    logging.error("Failed to call Supabase REST for user upsert %s: %s", user_id, exc)
+        finally:
+            if local_db:
+                local_db.close()
+    except Exception as e:
+        logging.error("Unexpected error in remote upsert task for user %s: %s", user_id, e)
+
+
 def send_email_task(to_email: str, subject: str, body: str) -> None:
     if not send_email(to_email, subject, body):
         logging.error("Background email delivery failed for %s", to_email)
@@ -1530,7 +1657,8 @@ async def update_user_post(request: Request, user_id: int,
                            schedule_start: str = Form("06:00"),
                            schedule_end: str = Form("19:00"),
                            role: str = Form("staff"),
-                           db: Session = Depends(get_db)):
+                           db: Session = Depends(get_db),
+                           background_tasks: BackgroundTasks = None):
     """Handles user profile updates."""
     guard = require_admin_page(request)
     if guard:
@@ -1574,6 +1702,13 @@ async def update_user_post(request: Request, user_id: int,
     if not safe_commit(db, f"Update user {user_id}"):
         request.state.flash("Could not update the user profile right now.", "danger")
         return RedirectResponse(url=f"/edit_user/{user_id}", status_code=303)
+
+    # Propagate the update to the remote in background
+    try:
+        if background_tasks is not None:
+            background_tasks.add_task(_remote_upsert_user_task, user.id)
+    except Exception:
+        logging.exception("Failed to schedule remote upsert task for user %s", user.id)
 
     record_audit_event(
         db,
@@ -2469,6 +2604,12 @@ async def delete_user(user_id: int, request: Request, background_tasks: Backgrou
         if face_engine:
             background_tasks.add_task(train_and_reload_model_task)
 
+        # Propagate deletion to remote in background
+        try:
+            background_tasks.add_task(_remote_delete_user_task, user.id)
+        except Exception:
+            logging.exception("Failed to schedule remote deletion propagation for user %s", user.id)
+
         record_audit_event(
             db,
             action_type="delete_user",
@@ -2540,6 +2681,96 @@ async def api_train_model(request: Request, background_tasks: BackgroundTasks):
         return JSONResponse({'status': 'busy', 'message': 'Face model is already updating.'}, status_code=409)
     else:
         return JSONResponse({'status': 'error', 'message': 'Face engine not available.'}, status_code=500)
+
+# --- Webhook & remote-trigger endpoints ---
+# Import remote helpers
+from app_helpers_remote import _apply_remote_delete, _apply_remote_upsert
+
+
+@app.post('/api/webhook/trigger_sync')
+async def api_webhook_trigger_sync(request: Request, background_tasks: BackgroundTasks):
+    """Trigger an immediate sync: push pending to remote and pull remote->local.
+
+    Protected by WEBHOOK_SECRET (X-Webhook-Token header).
+    """
+    token = request.headers.get('X-Webhook-Token') or request.query_params.get('token')
+    if not token or token != settings.WEBHOOK_SECRET:
+        return JSONResponse({'status': 'error', 'message': 'Unauthorized'}, status_code=401)
+
+    if not sync_engine:
+        return JSONResponse({'status': 'error', 'message': 'Sync engine not running'}, status_code=503)
+
+    # Schedule push then pull so remote sees local changes first
+    try:
+        background_tasks.add_task(sync_engine._sync_pending)
+        background_tasks.add_task(sync_engine._pull_remote_changes)
+        return JSONResponse({'status': 'success', 'message': 'Sync tasks scheduled'})
+    except Exception as e:
+        logging.error('Failed to schedule sync tasks: %s', e)
+        return JSONResponse({'status': 'error', 'message': 'Failed to schedule tasks'}, status_code=500)
+
+
+@app.post('/api/webhook/remote_event')
+async def api_webhook_remote_event(request: Request, background_tasks: BackgroundTasks):
+    """Receive a remote event (create/update/delete) and apply conservatively to local DB.
+
+    Expected JSON payload examples:
+      {"type": "user.updated", "user": {...}}
+      {"type": "user.deleted", "user_id": 42}
+
+    Protected by WEBHOOK_SECRET.
+    """
+    token = request.headers.get('X-Webhook-Token') or request.query_params.get('token')
+    if not token or token != settings.WEBHOOK_SECRET:
+        return JSONResponse({'status': 'error', 'message': 'Unauthorized'}, status_code=401)
+
+    data = await request.json()
+    ev_type = data.get('type')
+
+    if ev_type == 'user.deleted':
+        uid = data.get('user_id')
+        if not uid:
+            return JSONResponse({'status': 'error', 'message': 'user_id missing'}, status_code=400)
+        # conservative: delete local user and attendance to mirror remote deletion
+        try:
+            background_tasks.add_task(_apply_remote_delete, int(uid))
+            return JSONResponse({'status': 'success', 'message': 'delete scheduled'})
+        except Exception as e:
+            logging.error('Failed to schedule remote delete apply: %s', e)
+            return JSONResponse({'status': 'error', 'message': 'failed to schedule'}, status_code=500)
+
+    if ev_type in ('user.created', 'user.updated'):
+        user_obj = data.get('user')
+        if not user_obj:
+            return JSONResponse({'status': 'error', 'message': 'user object missing'}, status_code=400)
+        try:
+            background_tasks.add_task(_apply_remote_upsert, user_obj)
+            return JSONResponse({'status': 'success', 'message': 'upsert scheduled'})
+        except Exception as e:
+            logging.error('Failed to schedule remote upsert apply: %s', e)
+            return JSONResponse({'status': 'error', 'message': 'failed to schedule'}, status_code=500)
+
+    return JSONResponse({'status': 'error', 'message': 'unknown event type'}, status_code=400)
+
+
+@app.get('/api/sync_stats')
+async def api_sync_stats(request: Request):
+    """Returns current sync engine stats for debugging. Requires admin API access."""
+    guard = require_admin_api(request)
+    if guard:
+        return guard
+    if not sync_engine:
+        return JSONResponse({'status': 'error', 'message': 'Sync engine not initialized'}, status_code=503)
+    try:
+        stats = sync_engine.get_sync_stats()
+        # Don't return huge response bodies
+        if stats.get('last_response_text') and len(stats['last_response_text']) > 2000:
+            stats['last_response_text'] = stats['last_response_text'][:2000] + '...'
+        return JSONResponse({'status': 'success', 'stats': stats})
+    except Exception as e:
+        logging.exception('Failed to fetch sync stats: %s', e)
+        return JSONResponse({'status': 'error', 'message': 'internal error'}, status_code=500)
+
 
 @app.get("/api/advanced_analytics_data")
 async def advanced_analytics_data(

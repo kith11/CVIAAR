@@ -92,10 +92,15 @@ class SyncEngine:
             'last_sync_time': None,
             'last_error': None,
             'consecutive_failures': 0,
-            'disabled': False
+            'disabled': False,
+            # Debug fields for REST/Postgres responses
+            'last_response_code': None,
+            'last_response_text': None,
         }
 
         self._last_absence_marked_date: str | None = None
+        # Timestamp of last successful remote → local pull
+        self._last_pull_at: datetime | None = None
 
     def start_sync_worker(self):
         """Starts the background synchronization thread."""
@@ -227,6 +232,13 @@ class SyncEngine:
 
                 if self._check_internet():
                     self._sync_pending()
+                    # Conservative pull: bring recent remote attendance into local DB (no deletions)
+                    try:
+                        pulled = self._pull_remote_changes()
+                        if pulled:
+                            logger.info(f"Pulled {pulled} remote records into local DB.")
+                    except Exception as e:
+                        logger.error(f"Remote->local pull failed: {e}")
                 
                 # Dynamic sync interval based on success/failure
                 interval = self.sync_interval
@@ -492,19 +504,180 @@ class SyncEngine:
 
             if resp.status_code in [200, 201, 204]:
                 logger.info(f"Successfully synced {len(batch)} records. Status: {resp.status_code}")
+                # Clear last response debug info on success
+                self.sync_stats['last_response_code'] = resp.status_code
+                self.sync_stats['last_response_text'] = resp.text[:2048] if resp.text else None
                 return True
             else:
                 logger.error(f"Failed to sync records. Status: {resp.status_code}, Response: {resp.text}")
+                # Record debug info for operator
+                self.sync_stats['last_response_code'] = resp.status_code
+                self.sync_stats['last_response_text'] = resp.text[:2048] if resp.text else None
                 # Log headers for debugging (excluding sensitive info)
                 safe_headers = {k: v if k.lower() not in ['apikey', 'authorization'] else '[MASKED]' for k, v in headers.items()}
                 logger.error(f"Request Headers: {safe_headers}")
                 return False
         except requests.exceptions.RequestException as re:
             logger.error(f"Network error during Supabase sync: {re}")
+            self.sync_stats['last_error'] = str(re)
             return False
         except Exception as e:
             logger.error(f"Unexpected exception during Supabase sync: {e}")
+            self.sync_stats['last_error'] = str(e)
             return False
+        finally:
+            local_session.close()
+
+    def _pull_remote_changes(self) -> int:
+        """
+        Conservative remote -> local pull. Fetches recent attendance rows from the remote
+        database (direct Postgres or Supabase REST) and upserts them into the local SQLite
+        store. Does NOT delete local rows — this is intentionally conservative.
+
+        Returns the number of local rows inserted or updated.
+        """
+        if not self._check_internet():
+            return 0
+
+        local_session = self.Session()
+        pulled = 0
+        try:
+            cutoff = datetime.now() - timedelta(days=self.backfill_days)
+
+            # Helper to upsert a remote-attendance dict into local DB session
+            def _upsert_local_from_remote(rec):
+                nonlocal pulled
+                sync_key = rec.get('sync_key') if isinstance(rec, dict) else getattr(rec, 'sync_key', None)
+                if not sync_key:
+                    return
+                local_row = local_session.query(Attendance).filter_by(sync_key=sync_key).first()
+                if not local_row:
+                    # Insert new local row (mark synced since it came from remote)
+                    new = Attendance(
+                        sync_key=sync_key,
+                        user_id=rec.get('user_id') if isinstance(rec, dict) else rec.user_id,
+                        timestamp=(rec.get('timestamp') if isinstance(rec, dict) else rec.timestamp),
+                        status=rec.get('status') if isinstance(rec, dict) else rec.status,
+                        session=rec.get('session') if isinstance(rec, dict) else rec.session,
+                        event_type=rec.get('event_type') if isinstance(rec, dict) else rec.event_type,
+                        auto_generated=rec.get('auto_generated') if isinstance(rec, dict) else rec.auto_generated,
+                        notes=rec.get('notes') if isinstance(rec, dict) else rec.notes,
+                        device_id=rec.get('device_id') if isinstance(rec, dict) else rec.device_id,
+                        synced=1,
+                        synced_at=(datetime.fromisoformat(rec.get('synced_at')) if isinstance(rec, dict) and rec.get('synced_at') else (rec.synced_at if not isinstance(rec, dict) else None)),
+                    )
+                    local_session.add(new)
+                    pulled += 1
+                else:
+                    # Update if remote has a newer synced_at
+                    remote_synced_at = None
+                    if isinstance(rec, dict):
+                        remote_synced_at = rec.get('synced_at')
+                        if remote_synced_at:
+                            try:
+                                remote_synced_at = datetime.fromisoformat(remote_synced_at)
+                            except Exception:
+                                remote_synced_at = None
+                    else:
+                        remote_synced_at = getattr(rec, 'synced_at', None)
+
+                    if remote_synced_at and (not getattr(local_row, 'synced_at', None) or remote_synced_at > local_row.synced_at):
+                        local_row.status = rec.get('status') if isinstance(rec, dict) else rec.status
+                        local_row.session = rec.get('session') if isinstance(rec, dict) else rec.session
+                        local_row.event_type = rec.get('event_type') if isinstance(rec, dict) else rec.event_type
+                        local_row.notes = rec.get('notes') if isinstance(rec, dict) else rec.notes
+                        local_row.device_id = rec.get('device_id') if isinstance(rec, dict) else rec.device_id
+                        local_row.synced = 1
+                        local_row.synced_at = remote_synced_at
+                        pulled += 1
+
+            # 1) Direct Postgres remote
+            if self.RemoteSession:
+                remote_session = self.RemoteSession()
+                try:
+                    remote_rows = (
+                        remote_session.query(Attendance)
+                        .filter(Attendance.timestamp >= cutoff)
+                        .all()
+                    )
+                    for r in remote_rows:
+                        # ensure user exists locally
+                        remote_user = remote_session.get(User, r.user_id)
+                        if remote_user:
+                            local_user = local_session.get(User, remote_user.id)
+                            if not local_user:
+                                # create minimal user locally (no overwrite)
+                                local_session.add(User(
+                                    id=remote_user.id,
+                                    name=remote_user.name,
+                                    email=remote_user.email,
+                                    staff_code=remote_user.staff_code,
+                                    created_at=remote_user.created_at,
+                                    schedule_start=remote_user.schedule_start,
+                                    schedule_end=remote_user.schedule_end,
+                                    employment_type=remote_user.employment_type,
+                                    role=remote_user.role,
+                                ))
+                        _upsert_local_from_remote(r)
+                    local_session.commit()
+                    self._last_pull_at = datetime.now()
+                    return pulled
+                finally:
+                    remote_session.close()
+
+            # 2) Supabase REST fallback
+            if self.supabase_url and self.supabase_key:
+                base = self.supabase_url.rstrip('/')
+                headers = {
+                    'apikey': self.supabase_key,
+                    'Authorization': f'Bearer {self.supabase_key}',
+                    'Content-Type': 'application/json',
+                }
+                iso_cutoff = cutoff.isoformat()
+                url = f"{base}/rest/v1/attendance_logs?timestamp=gte.{iso_cutoff}&select=*"
+                resp = requests.get(url, headers=headers, timeout=10)
+                if resp.status_code != 200:
+                    logger.error(f"Failed to fetch remote attendance via REST: {resp.status_code} {resp.text}")
+                    return 0
+                rows = resp.json()
+                # Upsert referenced users first
+                user_ids = {r.get('user_id') for r in rows if r.get('user_id') is not None}
+                if user_ids:
+                    users_url = f"{base}/rest/v1/users?select=*"  # we will fetch and insert locally
+                    # Supabase doesn't support bulk fetch by id list in a single query easily here; fetch users individually
+                    for uid in user_ids:
+                        try:
+                            r = requests.get(f"{base}/rest/v1/users?id=eq.{uid}", headers=headers, timeout=5)
+                            if r.status_code == 200 and r.json():
+                                u = r.json()[0]
+                                # upsert local user if missing
+                                local_u = local_session.get(User, u.get('id'))
+                                if not local_u:
+                                    local_session.add(User(
+                                        id=u.get('id'),
+                                        name=u.get('name'),
+                                        email=u.get('email'),
+                                        staff_code=u.get('staff_code'),
+                                        created_at=(datetime.fromisoformat(u.get('created_at')) if u.get('created_at') else None),
+                                        schedule_start=u.get('schedule_start'),
+                                        schedule_end=u.get('schedule_end'),
+                                        employment_type=u.get('employment_type'),
+                                        role=u.get('role'),
+                                    ))
+                        except Exception:
+                            continue
+
+                for r in rows:
+                    _upsert_local_from_remote(r)
+                local_session.commit()
+                self._last_pull_at = datetime.now()
+                return pulled
+
+            return 0
+        except Exception as e:
+            local_session.rollback()
+            logger.error(f"Remote->local pull error: {e}")
+            return 0
         finally:
             local_session.close()
 
