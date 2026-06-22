@@ -1078,6 +1078,133 @@ def queue_email_delivery(background_tasks: BackgroundTasks, to_email: str, subje
     background_tasks.add_task(send_email_task, to_email, subject, body)
 
 
+# --- Remote propagation helpers ---
+import requests
+
+def _remote_delete_user_task(user_id: int) -> None:
+    """Propagate a local user deletion to the remote (Postgres or Supabase REST)."""
+    try:
+        if not sync_engine:
+            return
+        # Prefer direct Postgres when available
+        if sync_engine.RemoteSession:
+            remote_session = sync_engine.RemoteSession()
+            try:
+                remote_session.query(Attendance).filter(Attendance.user_id == user_id).delete()
+                remote_user = remote_session.get(User, user_id)
+                if remote_user:
+                    remote_session.delete(remote_user)
+                remote_session.commit()
+                logging.info("Remote deletion propagated for user %s", user_id)
+            except Exception as exc:
+                remote_session.rollback()
+                logging.error("Failed to propagate remote deletion for user %s: %s", user_id, exc)
+            finally:
+                remote_session.close()
+            return
+
+        # REST fallback for Supabase
+        if sync_engine.supabase_url and sync_engine.supabase_key:
+            base = sync_engine.supabase_url.rstrip('/')
+            headers = {
+                'apikey': sync_engine.supabase_key,
+                'Authorization': f'Bearer {sync_engine.supabase_key}',
+            }
+            try:
+                requests.delete(f"{base}/rest/v1/attendance_logs?user_id=eq.{user_id}", headers=headers, timeout=10)
+                requests.delete(f"{base}/rest/v1/users?id=eq.{user_id}", headers=headers, timeout=10)
+                logging.info("Remote REST deletion propagated for user %s", user_id)
+            except Exception as exc:
+                logging.error("Failed to propagate remote REST deletion for user %s: %s", user_id, exc)
+    except Exception as e:
+        logging.error("Unexpected error in remote delete task for user %s: %s", user_id, e)
+
+
+def _remote_upsert_user_task(user_id: int) -> None:
+    """Propagate a local user update/create to the remote database or Supabase REST.
+
+    Conservative: only inserts or updates the remote user row to mirror local profile fields.
+    Does not attempt to merge complex conflicts; remote is updated to match local.
+    """
+    try:
+        if not sync_engine:
+            return
+        local_db = None
+        try:
+            local_db = sync_engine.Session()
+            user = local_db.get(User, user_id)
+            if not user:
+                return
+            # Direct Postgres
+            if sync_engine.RemoteSession:
+                remote_session = sync_engine.RemoteSession()
+                try:
+                    remote_user = remote_session.get(User, user_id)
+                    if not remote_user:
+                        new_remote = User(
+                            id=user.id,
+                            name=user.name,
+                            email=user.email,
+                            staff_code=user.staff_code,
+                            created_at=user.created_at,
+                            schedule_start=user.schedule_start,
+                            schedule_end=user.schedule_end,
+                            employment_type=user.employment_type,
+                            role=user.role,
+                        )
+                        remote_session.add(new_remote)
+                    else:
+                        remote_user.name = user.name
+                        remote_user.email = user.email
+                        remote_user.staff_code = user.staff_code
+                        remote_user.schedule_start = user.schedule_start
+                        remote_user.schedule_end = user.schedule_end
+                        remote_user.employment_type = user.employment_type
+                        remote_user.role = user.role
+                    remote_session.commit()
+                    logging.info("Remote upserted user %s", user_id)
+                except Exception as exc:
+                    remote_session.rollback()
+                    logging.error("Failed to upsert remote user %s: %s", user_id, exc)
+                finally:
+                    remote_session.close()
+                return
+
+            # REST fallback
+            if sync_engine.supabase_url and sync_engine.supabase_key:
+                base = sync_engine.supabase_url.rstrip('/')
+                headers = {
+                    'apikey': sync_engine.supabase_key,
+                    'Authorization': f'Bearer {sync_engine.supabase_key}',
+                    'Content-Type': 'application/json',
+                    'Prefer': 'resolution=merge-duplicates'
+                }
+                payload = [{
+                    'id': user.id,
+                    'name': user.name,
+                    'email': user.email,
+                    'staff_code': user.staff_code,
+                    'created_at': user.created_at.isoformat() if getattr(user, 'created_at', None) else None,
+                    'schedule_start': getattr(user, 'schedule_start', None),
+                    'schedule_end': getattr(user, 'schedule_end', None),
+                    'employment_type': getattr(user, 'employment_type', None),
+                    'role': getattr(user, 'role', None),
+                }]
+                try:
+                    resp = requests.post(f"{base}/rest/v1/users", json=payload, headers=headers, timeout=10)
+                    if resp.status_code not in (200, 201, 204):
+                        logging.error("Supabase REST user upsert failed for %s: %s %s", user_id, resp.status_code, resp.text)
+                    else:
+                        logging.info("Supabase REST user upsert succeeded for %s", user_id)
+                except Exception as exc:
+                    logging.error("Failed to call Supabase REST for user upsert %s: %s", user_id, exc)
+        finally:
+            if local_db:
+                local_db.close()
+    except Exception as e:
+        logging.error("Unexpected error in remote upsert task for user %s: %s", user_id, e)
+
+
 def send_email_task(to_email: str, subject: str, body: str) -> None:
     if not send_email(to_email, subject, body):
         logging.error("Background email delivery failed for %s", to_email)
@@ -1530,7 +1657,8 @@ async def update_user_post(request: Request, user_id: int,
                            schedule_start: str = Form("06:00"),
                            schedule_end: str = Form("19:00"),
                            role: str = Form("staff"),
-                           db: Session = Depends(get_db)):
+                           db: Session = Depends(get_db),
+                           background_tasks: BackgroundTasks = None):
     """Handles user profile updates."""
     guard = require_admin_page(request)
     if guard:
@@ -1574,6 +1702,13 @@ async def update_user_post(request: Request, user_id: int,
     if not safe_commit(db, f"Update user {user_id}"):
         request.state.flash("Could not update the user profile right now.", "danger")
         return RedirectResponse(url=f"/edit_user/{user_id}", status_code=303)
+
+    # Propagate the update to the remote in background
+    try:
+        if background_tasks is not None:
+            background_tasks.add_task(_remote_upsert_user_task, user.id)
+    except Exception:
+        logging.exception("Failed to schedule remote upsert task for user %s", user.id)
 
     record_audit_event(
         db,
