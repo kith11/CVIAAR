@@ -114,6 +114,12 @@ class SyncEngine:
             users = session.query(User).all()
             created = 0
             for user in users:
+                # Skip marking absences for users created after the target date.
+                user_created = getattr(user, "created_at", None)
+                if user_created is not None and user_created.date() > target_date:
+                    # User did not exist on target_date
+                    continue
+
                 day_records = (
                     session.query(Attendance)
                     .filter(
@@ -147,6 +153,12 @@ class SyncEngine:
 
                     record_hour = 8 if session_name == AM_SESSION else 13
                     record_ts = datetime(target_date.year, target_date.month, target_date.day, record_hour, 0, 0)
+
+                    # If the user was created on the same day and their created_at is later
+                    # than the absent timestamp, skip marking that session as absent.
+                    if user_created is not None and user_created.date() == target_date and user_created > record_ts:
+                        continue
+
                     record = Attendance(
                         sync_key=str(uuid.uuid4()),
                         user_id=user.id,
