@@ -410,7 +410,9 @@ class SyncEngine:
 
     def _upsert_supabase(self, batch) -> bool:
         """
-        Upserts a batch of attendance records to the Supabase server.
+        Upserts a batch of attendance records to the Supabase server. This now
+        ensures that referenced users are upserted first so foreign-key
+        constraints on attendance inserts don't fail when using the REST API.
 
         Args:
             batch (list): A list of attendance records to upsert.
@@ -422,6 +424,7 @@ class SyncEngine:
             logger.error("Supabase URL or Key not configured. Skipping sync.")
             return False
 
+        local_session = self.Session()
         try:
             headers = {
                 'apikey': self.supabase_key,
@@ -431,15 +434,50 @@ class SyncEngine:
             }
             # Ensure URL has trailing slash before rest/v1/
             base_url = self.supabase_url.rstrip('/')
-            url = f"{base_url}/rest/v1/attendance_logs"
-            
-            logger.info(f"Attempting to sync {len(batch)} records to {url}")
-            # Log the first record as a sample (masking keys if any, but batch is data)
+            users_url = f"{base_url}/rest/v1/users"
+            attendance_url = f"{base_url}/rest/v1/attendance_logs"
+
+            # 1) Upsert referenced users first (REST fallback previously didn't do this)
+            try:
+                user_ids = {item.get('user_id') for item in batch if item.get('user_id') is not None}
+                users_payload = []
+                if user_ids:
+                    users = local_session.query(User).filter(User.id.in_(user_ids)).all()
+                    for u in users:
+                        users_payload.append({
+                            'id': u.id,
+                            'name': u.name,
+                            'email': u.email,
+                            'staff_code': u.staff_code,
+                            'created_at': u.created_at.isoformat() if getattr(u, 'created_at', None) else None,
+                            'schedule_start': getattr(u, 'schedule_start', None),
+                            'schedule_end': getattr(u, 'schedule_end', None),
+                            'employment_type': getattr(u, 'employment_type', None),
+                            'role': getattr(u, 'role', None),
+                        })
+
+                if users_payload:
+                    logger.info(f"Attempting to upsert {len(users_payload)} users to {users_url}")
+                    resp_users = requests.post(users_url, json=users_payload, headers=headers, timeout=10)
+                    if resp_users.status_code not in [200, 201, 204]:
+                        logger.error(f"Failed to upsert users. Status: {resp_users.status_code}, Response: {resp_users.text}")
+                        safe_headers = {k: v if k.lower() not in ['apikey', 'authorization'] else '[MASKED]' for k, v in headers.items()}
+                        logger.error(f"User upsert Request Headers: {safe_headers}")
+                        return False
+            except requests.exceptions.RequestException as re:
+                logger.error(f"Network error during Supabase user upsert: {re}")
+                return False
+            except Exception as e:
+                logger.error(f"Unexpected exception during Supabase user upsert: {e}")
+                return False
+
+            # 2) Upsert attendance records
+            logger.info(f"Attempting to sync {len(batch)} records to {attendance_url}")
             if batch:
                 logger.debug(f"Sample record: {batch[0]}")
 
-            resp = requests.post(url, json=batch, headers=headers, timeout=10)
-            
+            resp = requests.post(attendance_url, json=batch, headers=headers, timeout=10)
+
             if resp.status_code in [200, 201, 204]:
                 logger.info(f"Successfully synced {len(batch)} records. Status: {resp.status_code}")
                 return True
@@ -455,6 +493,8 @@ class SyncEngine:
         except Exception as e:
             logger.error(f"Unexpected exception during Supabase sync: {e}")
             return False
+        finally:
+            local_session.close()
 
     def record_attendance(
         self,
